@@ -1,0 +1,238 @@
+#!/bin/bash
+#
+# The appliance's console menu: what someone at the VM console needs when the
+# web interface is out of reach -- no DHCP, a wrong static address, a
+# forgotten password. Opens after root logs in on the console (see
+# console-profile.sh) and can be started any time as xenman-setup.
+#
+# Menu choices are digits and answers are plain words: the console may well
+# have a keyboard layout nobody chose.
+
+set -u
+
+NETWORK="${XENMAN_NETWORK:-/usr/local/sbin/xenman-network}"
+FIREWALL="${XENMAN_FIREWALL:-/usr/local/sbin/xenman-firewall}"
+NODE="${NODE:-/usr/local/bin/node}"
+LIB="${XENMAN_LIB:-/usr/local/lib/xenman}"
+VERSION_FILE="${VERSION_FILE:-/opt/xenman/.version}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+DATA_DIR="${DATA_DIR:-/var/lib/xenman}"
+
+bold=$(tput bold 2>/dev/null || true)
+dim=$(tput dim 2>/dev/null || true)
+reset=$(tput sgr0 2>/dev/null || true)
+
+pause() { echo; read -r -p "Press Enter to continue " _ || exit 0; }
+
+addresses() {
+  ip -4 -o addr show scope global 2>/dev/null | awk '$2 ~ /^(eth0|en)/ { sub(/\/.*/, "", $4); print $4 }'
+}
+
+header() {
+  clear 2>/dev/null || true
+  local version addr
+  version=$(cat "${VERSION_FILE}" 2>/dev/null || echo "unknown")
+  echo "${bold}  XenMan Appliance${reset}  ${dim}${version} -- $(hostname)${reset}"
+  echo
+  addr=$(addresses | head -n 1)
+  if [ -n "${addr}" ]; then
+    echo "  Web interface:  ${bold}https://${addr}/${reset}"
+  else
+    echo "  ${bold}No IP address${reset} -- choose 2 to configure the network."
+  fi
+  echo "  ----------------------------------------------------------"
+}
+
+# ask <prompt> <default>: reads a line; Enter keeps the default, "-" clears it.
+ask() {
+  local answer
+  read -r -p "  $1 [${2:-none}]: " answer || exit 0
+  if [ "${answer}" = "-" ]; then echo ""
+  elif [ -z "${answer}" ]; then echo "$2"
+  else echo "${answer}"
+  fi
+}
+
+current() { # current <field>: from the saved configuration
+  "${NETWORK}" show --json 2>/dev/null | "${NODE}" -e '
+    let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      try { const v = JSON.parse(s).config[process.argv[1]];
+        console.log(Array.isArray(v) ? v.join(" ") : (v ?? "")); } catch { console.log(""); }
+    });' "$1"
+}
+
+configure_network() {
+  header
+  echo "  ${bold}Configure network${reset}   (Enter keeps a value, - clears it)"
+  echo
+  local mode address gateway dns domains hostname
+  while :; do
+    mode=$(ask "dhcp or static" "$(current mode)")
+    case "${mode}" in dhcp|static) break ;; *) echo "  Please type dhcp or static." ;; esac
+  done
+  local args=(--mode "${mode}")
+  if [ "${mode}" = "static" ]; then
+    address=$(ask "Address with prefix, e.g. 10.0.0.5/24" "$(current address)")
+    gateway=$(ask "Gateway" "$(current gateway)")
+    args+=(--address "${address}" --gateway "${gateway}")
+  fi
+  dns=$(ask "DNS servers (space separated)" "$(current dns)")
+  domains=$(ask "Search domains (space separated)" "$(current domains)")
+  hostname=$(ask "Host name" "$(current hostname)")
+  args+=(--dns "${dns}" --domains "${domains}" --hostname "${hostname}")
+
+  echo
+  read -r -p "  Apply these settings now? (yes/no) " yn || exit 0
+  case "${yn}" in
+    y|yes|Y|YES|j|ja)
+      echo
+      if "${NETWORK}" set "${args[@]}" --by console; then
+        echo "  Waiting for the network ..."
+        sleep 4
+        echo
+        "${NETWORK}" show
+      fi ;;
+    *) echo "  Nothing changed." ;;
+  esac
+  pause
+}
+
+reset_password() {
+  header
+  echo "  ${bold}Reset an administrator's password${reset}"
+  echo
+  local admins name token addr
+  mapfile -t admins < <("${NODE}" "${LIB}/reset-admin.js" list 2>/dev/null)
+  if [ "${#admins[@]}" -eq 0 ]; then
+    echo "  No administrator accounts found."; pause; return
+  fi
+  local i=1
+  for name in "${admins[@]}"; do echo "    ${i}) ${name}"; i=$((i + 1)); done
+  echo
+  read -r -p "  Number of the account (Enter to cancel): " i || exit 0
+  case "${i}" in ''|*[!0-9]*) return ;; esac
+  name="${admins[$((i - 1))]:-}"
+  [ -n "${name}" ] || return
+  read -r -p "  Clear the password of ${name}? (yes/no) " yn || exit 0
+  case "${yn}" in y|yes|Y|YES|j|ja) ;; *) echo "  Nothing changed."; pause; return ;; esac
+  if token=$("${NODE}" "${LIB}/reset-admin.js" reset "${name}"); then
+    addr=$(addresses | head -n 1)
+    echo
+    echo "  The password of ${name} is cleared. Within 30 minutes, open"
+    echo
+    echo "      ${bold}https://${addr:-<address>}/invite?token=${token}${reset}"
+    echo
+    echo "  and choose a new one. Until then nobody can log in as ${name}."
+  fi
+  pause
+}
+
+confirm_run() { # confirm_run <question> <command...>
+  local q="$1"; shift
+  read -r -p "  ${q} (yes/no) " yn || exit 0
+  case "${yn}" in y|yes|Y|YES|j|ja) "$@" ;; *) echo "  Cancelled."; pause ;; esac
+}
+
+# SSH is off unless switched on here -- only here, at the VM console, not from
+# the web interface. When on, root logs in with the password chosen at the
+# first console login.
+ssh_state() { "${SYSTEMCTL}" is-active --quiet ssh.service && echo on || echo off; }
+
+ssh_audit() { # ssh_audit <action>
+  "${NODE}" "${LIB}/audit-append.js" --file "${DATA_DIR}/audit.jsonl" --action "$1" --outcome success \
+    --target appliance --detail "on the appliance console" >/dev/null 2>&1 || true
+}
+
+ssh_switch() { # ssh_switch on|off
+  if [ "$1" = on ]; then
+    if "${SYSTEMCTL}" enable --now ssh.service >/dev/null 2>&1; then
+      ssh_audit ssh_enabled
+      echo "  SSH is on: root can log in over the network with its password."
+    else
+      echo "  SSH could not be switched on."
+    fi
+  else
+    if "${SYSTEMCTL}" disable --now ssh.service >/dev/null 2>&1; then
+      ssh_audit ssh_disabled
+      echo "  SSH is off. Sessions open now stay until they end."
+    else
+      echo "  SSH could not be switched off."
+    fi
+  fi
+  pause
+}
+
+ssh_access() {
+  header
+  echo "  ${bold}SSH access${reset}"
+  echo
+  if [ "$(ssh_state)" = on ]; then
+    echo "  SSH is ${bold}on${reset}: root can log in over the network with its password."
+    echo
+    confirm_run "Switch SSH off?" ssh_switch off
+  else
+    echo "  SSH is ${bold}off${reset}. Switched on, root can log in over the network"
+    echo "  with its password."
+    echo
+    confirm_run "Switch SSH on?" ssh_switch on
+  fi
+}
+
+# Whether the web interface answers only some addresses (Settings -> Appliance -> Access).
+access_state() {
+  "${FIREWALL}" show --json 2>/dev/null | "${NODE}" -e '
+    let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+      try { console.log(JSON.parse(s).config.enabled ? "limited" : "open"); } catch { console.log("open"); } });' 2>/dev/null || echo open
+}
+
+access() {
+  header
+  echo "  ${bold}Access to the web interface${reset}"
+  echo
+  "${FIREWALL}" show
+  echo
+  if [ "$(access_state)" = limited ]; then
+    echo "  Locked out -- the NetScaler down, or an address missing? Opening it here"
+    echo "  lets every address reach the web interface again; the list is kept."
+    echo
+    confirm_run "Open the web interface to all addresses?" access_off
+  else
+    echo "  Limited to the NetScaler's addresses in the web interface:"
+    echo "  Settings -> Appliance -> Access."
+    pause
+  fi
+}
+
+access_off() {
+  echo
+  "${FIREWALL}" off --by console && echo "  The web interface answers every address again."
+  pause
+}
+
+while :; do
+  header
+  echo "    1) Show network"
+  echo "    2) Configure network"
+  echo "    3) Test connectivity"
+  echo "    4) Reset an administrator's password"
+  echo "    5) Restart XenMan"
+  echo "    6) Restart the appliance"
+  echo "    7) Shut down the appliance"
+  echo "    8) SSH access ($(ssh_state))"
+  echo "    9) Access to the web interface ($(access_state))"
+  echo "    0) Exit to the shell"
+  echo
+  read -r -p "  Choice: " choice || exit 0
+  case "${choice}" in
+    1) header; "${NETWORK}" show; pause ;;
+    2) configure_network ;;
+    3) header; echo "  Testing ..."; echo; "${NETWORK}" test; pause ;;
+    4) reset_password ;;
+    5) "${SYSTEMCTL}" restart xenman && echo "  XenMan restarted."; pause ;;
+    6) confirm_run "Restart the appliance?" "${SYSTEMCTL}" reboot ;;
+    7) confirm_run "Shut down the appliance?" "${SYSTEMCTL}" poweroff ;;
+    8) ssh_access ;;
+    9) access ;;
+    0|q|exit) clear 2>/dev/null || true; echo "Type xenman-setup to open this menu again."; exit 0 ;;
+  esac
+done

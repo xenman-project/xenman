@@ -1,0 +1,12 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Switches SSH off once on appliances from before it was off by default; see
+# /usr/local/sbin/xenman-ssh-default. Started by xenman-ssh-default.timer.
+
+[Unit]
+Description=Switch SSH off once, as the appliance now ships
+ConditionPathExists=!/etc/xenman/ssh-default-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xenman-ssh-default

@@ -1,0 +1,16 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Runs xenman-guest-tools.service shortly after the timer starts: at boot, and
+# right after an update that brings it -- an updater enables and starts new
+# timers, but only enables new services, so without this a first installation
+# by update would wait for the next restart.
+
+[Unit]
+Description=Install the XenServer guest tools XenMan carries
+
+[Timer]
+OnActiveSec=20s
+Unit=xenman-guest-tools.service
+
+[Install]
+WantedBy=timers.target

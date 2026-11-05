@@ -1,0 +1,16 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Runs xenman-ssh-default.service shortly after the timer starts: right after
+# the update that brings it (an updater starts new timers, but only enables new
+# services) and at boot, where the service's condition makes it a no-op once
+# done.
+
+[Unit]
+Description=Switch SSH off once, as the appliance now ships
+
+[Timer]
+OnActiveSec=20s
+Unit=xenman-ssh-default.service
+
+[Install]
+WantedBy=timers.target

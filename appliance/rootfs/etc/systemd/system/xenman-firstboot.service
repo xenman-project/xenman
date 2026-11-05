@@ -1,0 +1,15 @@
+# Managed by XenMan: replaced by appliance updates.
+
+[Unit]
+Description=XenMan appliance first boot
+ConditionPathExists=/var/lib/xenman-firstboot
+Before=ssh.service xenman.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/xenman-firstboot
+
+[Install]
+WantedBy=multi-user.target

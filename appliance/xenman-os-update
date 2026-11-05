@@ -1,0 +1,191 @@
+#!/bin/bash
+set -uo pipefail
+
+# Installs pending Debian security updates and records what changed in XenMan's
+# audit log. Runs as root, from apt-daily-upgrade.service -- a drop-in replaces
+# apt's own install step with this script, so there is exactly one path by
+# which the operating system changes, and that path is logged -- or by hand:
+#
+#     xenman-os-update               install what is pending, now
+#     xenman-os-update --dry-run     show what would be installed
+#     xenman-os-update --scheduled   what the timer runs: installs only if
+#                                    xenman-os-policy says the window is open
+#
+# Without this, unattended-upgrades wrote only to its own log under /var/log,
+# and XenMan's audit trail stayed silent while the software under it changed.
+
+DATA_DIR="${DATA_DIR:-/var/lib/xenman}"
+UPDATE_DIR="${DATA_DIR}/updates"
+STATUS_FILE="${UPDATE_DIR}/os-status.json"
+AUDIT_FILE="${DATA_DIR}/audit.jsonl"
+AUDIT_APPEND="${AUDIT_APPEND:-/usr/local/lib/xenman/audit-append.js}"
+# Everything this writes under DATA_DIR goes through here: XenMan owns that
+# directory and could put a symlink where the status file should be.
+DATA_WRITE="${DATA_WRITE:-$(dirname "${AUDIT_APPEND}")/data-write.js}"
+NODE="${NODE:-/usr/local/bin/node}"
+REBOOT_REQUIRED="${REBOOT_REQUIRED:-/var/run/reboot-required}"
+OS_POLICY="${OS_POLICY:-/usr/local/sbin/xenman-os-policy}"
+# What the installation prints, as it prints it: followed by the web interface
+# during "Install now" and shown afterwards under "Last run". Under /var/log,
+# not in XenMan's data directory -- that belongs to the web user, who could put
+# a symlink there and have root write through it.
+INSTALL_LOG="${OS_INSTALL_LOG:-/var/log/xenman/os-install.log}"
+
+# A package list longer than this is summarised; a kernel update alone can
+# touch a dozen packages, and the audit view is not a package manager.
+MAX_LISTED=30
+
+# join and sort must agree on collation, or join silently drops lines.
+export LC_ALL=C
+
+SCHEDULED=0
+case "${1:-}" in
+  --dry-run)   exec unattended-upgrade --dry-run -v ;;
+  --scheduled) SCHEDULED=1 ;;
+esac
+
+if [ "${SCHEDULED}" -eq 1 ]; then
+  # Keep the timer in step with the policy. On an appliance that reached this
+  # version by update rather than by a fresh .xva, this is also what creates
+  # both: the old timer fires at apt's old time, the check below finds that
+  # outside the window, and from the next run on the timer is where it belongs.
+  "${OS_POLICY}" apply --quiet >/dev/null 2>&1 || true
+
+  # The timer only starts the run; the policy decides. A timer can fire outside
+  # the window, and this is what keeps that from installing anything.
+  if ! reason=$("${OS_POLICY}" in-window 2>&1); then
+    OS_STATUS="${STATUS_FILE}" OS_REASON="${reason}" DATA_DIR="${DATA_DIR}" DATA_WRITE="${DATA_WRITE}" "${NODE}" -e '
+      const dw = require(process.env.DATA_WRITE);
+      const { OS_STATUS: file, DATA_DIR: data } = process.env;
+      let s = {};
+      try { s = JSON.parse(dw.readSmall(file) || "{}"); } catch {}
+      s.lastCheck = new Date().toISOString();
+      s.deferred = process.env.OS_REASON;
+      dw.ensureDir(require("path").dirname(file), data);
+      dw.writeFile(file, JSON.stringify(s, null, 2) + "\n", { mode: 0o644, ownerOf: data });
+    ' || echo "xenman-os-update: could not record the status" >&2
+    echo "xenman-os-update: not installing -- ${reason}"
+    exit 0
+  fi
+fi
+
+# Installed packages as "name version", one per line, sorted for join.
+snapshot() {
+  dpkg-query -W -f='${Status}\t${Package}\t${Version}\n' \
+    | awk -F'\t' '$1 ~ / installed$/ { print $2 " " $3 }' \
+    | sort
+}
+
+WORK=$(mktemp -d)
+trap 'rm -rf "${WORK}"' EXIT
+
+install -d -m 0755 "$(dirname "${INSTALL_LOG}")"
+rm -f "${INSTALL_LOG}"
+install -m 0644 /dev/null "${INSTALL_LOG}"
+live() { printf '%s\n' "$*" >> "${INSTALL_LOG}"; }
+if [ "${SCHEDULED}" -eq 1 ]; then
+  how="maintenance window"
+elif [ -n "${XENMAN_REQUESTED_BY:-}" ]; then
+  how="requested by ${XENMAN_REQUESTED_BY} in the web interface"
+else
+  how="started on the console"
+fi
+live "== $(date -u '+%Y-%m-%d %H:%M:%S') UTC -- installing security updates (${how}) =="
+
+snapshot > "${WORK}/before"
+# -v also copies dpkg's own output ("Unpacking ...", "Setting up ...") to
+# stdout, so the live log shows the installation itself, not just its summary.
+PYTHONUNBUFFERED=1 unattended-upgrade -v 2>&1 | tee "${WORK}/log" >> "${INSTALL_LOG}"
+rc=${PIPESTATUS[0]}
+snapshot > "${WORK}/after"
+
+# Comparing dpkg state before and after, rather than parsing the
+# unattended-upgrades log, keeps this independent of that log's format -- and
+# also catches what it removed as unused dependencies.
+join -a1 -a2 -e '-' -o '0,1.2,2.2' "${WORK}/before" "${WORK}/after" \
+  | awk '$2 != $3 {
+      if ($2 == "-")      print $1 " " $3 " (new)"
+      else if ($3 == "-") print $1 " " $2 " (removed)"
+      else                print $1 " " $2 " -> " $3
+    }' > "${WORK}/changes"
+
+count=$(wc -l < "${WORK}/changes")
+reboot=false
+[ -f "${REBOOT_REQUIRED}" ] && reboot=true
+
+if [ "${rc}" -ne 0 ]; then
+  outcome=failed
+elif [ "${count}" -gt 0 ]; then
+  outcome=installed
+else
+  outcome=nothing
+fi
+
+case "${outcome}" in
+  failed)    live "== failed: unattended-upgrade exited ${rc} ==" ;;
+  installed) live "== finished: ${count} packages changed$([ "${reboot}" = true ] && echo ' -- restart required') ==" ;;
+  nothing)   live "== finished: nothing to install ==" ;;
+esac
+
+# For the web interface, which cannot read /var/log. Written on every run, so
+# "last run" is true even on the days nothing was pending.
+OS_OUTCOME="${outcome}" OS_REBOOT="${reboot}" OS_CHANGES="${WORK}/changes" \
+  OS_LOG="${WORK}/log" OS_STATUS="${STATUS_FILE}" DATA_DIR="${DATA_DIR}" DATA_WRITE="${DATA_WRITE}" "${NODE}" -e '
+    const fs = require("fs");
+    const dw = require(process.env.DATA_WRITE);
+    const lines = (f) => fs.readFileSync(f, "utf-8").split("\n").filter(Boolean);
+    const at = new Date().toISOString();
+    const file = process.env.OS_STATUS;
+    dw.ensureDir(require("path").dirname(file), process.env.DATA_DIR);
+    dw.writeFile(file, JSON.stringify({
+      lastRun: at,
+      lastCheck: at,
+      outcome: process.env.OS_OUTCOME,
+      packages: lines(process.env.OS_CHANGES),
+      rebootRequired: process.env.OS_REBOOT === "true",
+      // Only kept on failure: the tail of the log is what explains it.
+      log: process.env.OS_OUTCOME === "failed" ? lines(process.env.OS_LOG).slice(-15) : [],
+    }, null, 2) + "\n", { mode: 0o644, ownerOf: process.env.DATA_DIR });
+  ' || echo "xenman-os-update: could not record the status" >&2
+
+audit() {
+  [ -d "${DATA_DIR}" ] || return 0
+  "${NODE}" "${AUDIT_APPEND}" --file "${AUDIT_FILE}" --action os_security_update \
+    --outcome "$1" --target "$2" --detail "$3" 2>/dev/null || true
+}
+
+case "${outcome}" in
+  failed)
+    audit failure "security updates" \
+      "unattended-upgrade exited ${rc}: $(tail -n 3 "${WORK}/log" | tr '\n' ' ')"
+    echo "xenman-os-update: unattended-upgrade failed (exit ${rc})" >&2
+    exit "${rc}"
+    ;;
+  installed)
+    listed=$(head -n "${MAX_LISTED}" "${WORK}/changes" | paste -sd ';' - | sed 's/;/; /g')
+    [ "${count}" -gt "${MAX_LISTED}" ] && listed="${listed}; and $((count - MAX_LISTED)) more"
+    [ "${reboot}" = true ] && listed="${listed} -- restart required"
+    audit success "${count} packages" "${listed}"
+    echo "xenman-os-update: ${count} packages changed"
+    ;;
+  nothing)
+    # No audit entry: one a day saying "nothing happened" would bury the
+    # entries that matter. The status file still records the run.
+    echo "xenman-os-update: nothing to install"
+    ;;
+esac
+
+# A restart inside the window, if the operator asked for one. Only on a
+# scheduled run -- which, having got this far, is inside the window -- and
+# also for a restart left pending by an earlier install: finishing that inside
+# the window is what the setting is for.
+if [ "${SCHEDULED}" -eq 1 ] && [ -f "${REBOOT_REQUIRED}" ] \
+  && [ "$("${OS_POLICY}" get rebootInWindow 2>/dev/null)" = "true" ]; then
+  why=$(tr '\n' ' ' < "${REBOOT_REQUIRED}.pkgs" 2>/dev/null)
+  [ -d "${DATA_DIR}" ] && "${NODE}" "${AUDIT_APPEND}" --file "${AUDIT_FILE}" \
+    --action os_restart --outcome success --target "maintenance window" \
+    --detail "restarting to activate security updates${why:+: ${why}}" 2>/dev/null
+  echo "xenman-os-update: restarting inside the maintenance window"
+  live "== restarting inside the maintenance window =="
+  systemctl reboot
+fi

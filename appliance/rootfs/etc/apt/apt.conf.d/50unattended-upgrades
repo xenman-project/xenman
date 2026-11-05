@@ -1,0 +1,19 @@
+// Managed by XenMan: replaced by appliance updates. Local additions belong in
+// a file of their own in this directory, which updates leave alone.
+//
+// Security updates install themselves; everything else waits for a release.
+// The appliance holds credentials for the virtualisation it manages, so an
+// unpatched openssl is the greater risk -- and -security is Debian's most
+// conservatively curated branch, which is what makes this defensible with
+// nobody watching.
+
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+// Kernel and library updates need a restart to take effect, and rebooting a
+// hypervisor management appliance unattended is not acceptable. This only
+// records the need in /var/run/reboot-required; XenMan surfaces it.
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";

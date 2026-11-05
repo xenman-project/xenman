@@ -1,0 +1,16 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Links the console menu into root's login on the VM console. An update may
+# only ship files under the paths XenMan owns, and /etc/profile.d is not one
+# of them, so the link is made here, from a file that is.
+
+[Unit]
+Description=Open the XenMan console menu at console login
+ConditionPathExists=/usr/local/lib/xenman/console-profile.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/ln -sfn /usr/local/lib/xenman/console-profile.sh /etc/profile.d/xenman-setup.sh
+
+[Install]
+WantedBy=multi-user.target

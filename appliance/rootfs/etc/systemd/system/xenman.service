@@ -1,0 +1,45 @@
+# Managed by XenMan: replaced by appliance updates. To change a setting, use
+# `systemctl edit xenman` -- the override lands in xenman.service.d/ and
+# survives updates, while edits to this file do not.
+
+[Unit]
+Description=XenMan
+After=network-online.target xenman-credential.service
+Wants=network-online.target xenman-credential.service
+
+[Service]
+Type=simple
+User=xenman
+Group=xenman
+# Reading the system journal, to forward it as syslog when that is switched on.
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/opt/xenman
+ExecStart=/usr/local/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=HOSTNAME=0.0.0.0
+Environment=PORT=80
+Environment=HTTPS_PORT=443
+Environment=DATA_DIR=/var/lib/xenman
+# XenServer's self-signed certificates are checked against the fingerprints
+# each pool is trusted with (lib/host-trust.ts), not switched off.
+# The key for the stored passwords, outside the data directory
+# (xenman-credential.service, lib/secret-box.ts).
+Environment=XENMAN_HOST_KEY_FILE=/run/xenman-secret/secret-key
+
+# Ports 80 and 443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# The data directory holds users.json, the JWT secret and the generated TLS
+# certificate; Next.js writes its own cache under the install directory.
+ReadWritePaths=/var/lib/xenman /opt/xenman/.next/cache
+
+[Install]
+WantedBy=multi-user.target

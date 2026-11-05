@@ -1,0 +1,10 @@
+# Managed by XenMan: replaced by appliance updates.
+
+[Unit]
+Description=Watch for XenMan update requests
+
+[Path]
+PathExists=/var/lib/xenman/updates/trigger
+
+[Install]
+WantedBy=multi-user.target

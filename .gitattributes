@@ -1,0 +1,6 @@
+# These run on Linux. Checked out on Windows with core.autocrlf they would come
+# back with CRLF, and a shebang ending in \r fails as "bad interpreter".
+*.sh text eol=lf
+appliance/xenman-* text eol=lf
+*.js text eol=lf
+appliance/rootfs/** text eol=lf

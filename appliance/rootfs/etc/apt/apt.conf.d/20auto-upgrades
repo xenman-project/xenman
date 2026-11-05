@@ -1,0 +1,6 @@
+// Managed by XenMan: replaced by appliance updates.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+// Fetched ahead, on apt's own daily schedule, so that installing in the
+// maintenance window does not depend on the mirror answering at 02:00.
+APT::Periodic::Download-Upgradeable-Packages "1";

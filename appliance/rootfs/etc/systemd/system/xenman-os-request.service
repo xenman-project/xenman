@@ -1,0 +1,13 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Root, and deliberately unhardened: it changes the update policy under /etc,
+# runs apt and may restart the machine. The protection is in os-request.js,
+# which trusts nothing in the request it reads.
+
+[Unit]
+Description=Carry out an operating system request from the XenMan web interface
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xenman-os-request

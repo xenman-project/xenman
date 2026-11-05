@@ -1,0 +1,4 @@
+#!/bin/sh
+# Carries out an operating-system request from the XenMan web interface. Run
+# by xenman-os-request.service; see os-request.js.
+exec "${NODE:-/usr/local/bin/node}" "${OS_REQUEST_JS:-/usr/local/lib/xenman/os-request.js}" "$@"

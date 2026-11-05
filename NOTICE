@@ -1,0 +1,69 @@
+XenMan
+=======
+
+XenMan is an independent project. It is not affiliated with, endorsed by or
+sponsored by Cloud Software Group, Inc. or Citrix. Citrix, XenServer and
+XenCenter are trademarks of Cloud Software Group, Inc. or its subsidiaries;
+Xen is a trademark of the Linux Foundation. They are used here only to say
+which product XenMan works with.
+
+
+Third-party material
+--------------------
+
+XenAdmin (XenCenter)
+https://github.com/xenserver/xenadmin
+
+Several workflows in XenMan follow XenAdmin's source code -- the order of the
+XenServer API calls, the rules that decide what may be done, and many of the
+user-facing texts, which are taken over word for word so that XenMan reads
+like the tool administrators know. XenAdmin is distributed under the
+following licence:
+
+  Copyright (c) Cloud Software Group, Inc.
+
+  Redistribution and use in source and binary forms,
+  with or without modification, are permitted provided
+  that the following conditions are met:
+
+  *   Redistributions of source code must retain the above
+      copyright notice, this list of conditions and the
+      following disclaimer.
+  *   Redistributions in binary form must reproduce the above
+      copyright notice, this list of conditions and the
+      following disclaimer in the documentation and/or other
+      materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+  CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+  MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+  DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+  CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+  BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+  SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  SUCH DAMAGE.
+
+noVNC
+https://github.com/novnc/noVNC
+Copyright (C) The noVNC authors. The VNC client under src/lib/novnc is
+noVNC's source, distributed under the Mozilla Public License 2.0; each file
+keeps its licence header.
+
+pako
+https://github.com/nodeca/pako
+Bundled with noVNC under src/lib/novnc/vendor/pako, MIT licence (see the
+LICENSE file there).
+
+xe-guest-utilities
+https://github.com/xenserver/xe-guest-utilities
+The VM tools package under appliance/vendor, installed into the appliance;
+licence in appliance/vendor/xe-guest-utilities.LICENSE.
+
+The npm packages XenMan depends on carry their own licences, listed in
+package-lock.json and in each package under node_modules.

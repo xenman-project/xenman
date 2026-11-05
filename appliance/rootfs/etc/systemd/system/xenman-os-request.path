@@ -1,0 +1,10 @@
+# Managed by XenMan: replaced by appliance updates.
+
+[Unit]
+Description=Watch for operating system requests from the XenMan web interface
+
+[Path]
+PathExists=/var/lib/xenman/updates/os-request.json
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# The XenServer guest agent from xe-guest-utilities: reports the appliance's IP
+# addresses and operating system to XenServer, and lets it shut the appliance
+# down cleanly. The package ships a SysV init script under this name; a unit
+# here takes its place, so systemd runs the agent natively and supervises it.
+
+[Unit]
+Description=XenServer guest agent
+ConditionVirtualization=xen
+ConditionPathExists=/usr/sbin/xe-daemon
+After=xenman-guest-tools.service
+
+[Service]
+ExecStartPre=/usr/sbin/xe-linux-distribution /var/cache/xe-linux-distribution
+ExecStart=/usr/sbin/xe-daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

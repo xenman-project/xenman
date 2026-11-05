@@ -1,0 +1,15 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# The updater runs as root and lives outside /opt/xenman, because /opt/xenman
+# is what it replaces. XenMan itself only drops a package and a trigger file;
+# this service decides against the release key whether any of it is installed.
+
+[Unit]
+Description=Install a XenMan appliance update
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xenman-updater
+# Deliberately unhardened: it replaces /opt/xenman and system files, and drives
+# systemctl. The protection is the signature check, not a sandbox.

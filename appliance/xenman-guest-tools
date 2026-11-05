@@ -1,0 +1,75 @@
+#!/bin/bash
+set -uo pipefail
+
+# Installs the XenServer guest tools the appliance carries, when the installed
+# version differs from the carried one -- and never goes back to an older one,
+# so a newer release installed by hand stays. Runs as root:
+#
+#     xenman-guest-tools              from xenman-guest-tools.service: install
+#                                     if needed, then (re)start the agent
+#     xenman-guest-tools --no-start   from the .xva build, inside the chroot
+#
+# The package comes with the appliance's own updates rather than from a
+# repository: Debian does not carry it, and XenServer publishes it as a
+# download, not an apt source.
+
+DEB="${GUEST_TOOLS_DEB:-/usr/local/lib/xenman/guest-tools/xe-guest-utilities.deb}"
+AGENT_UNIT="xe-linux-distribution.service"
+DATA_DIR="${DATA_DIR:-/var/lib/xenman}"
+AUDIT_FILE="${DATA_DIR}/audit.jsonl"
+AUDIT_APPEND="${AUDIT_APPEND:-/usr/local/lib/xenman/audit-append.js}"
+NODE="${NODE:-/usr/local/bin/node}"
+
+START=1
+[ "${1:-}" = "--no-start" ] && START=0
+
+if [ ! -f "${DEB}" ]; then
+  echo "xenman-guest-tools: no package at ${DEB}"
+  exit 0
+fi
+
+want=$(dpkg-deb -f "${DEB}" Version) || {
+  echo "xenman-guest-tools: ${DEB} is not a readable package" >&2
+  exit 1
+}
+have=$(dpkg-query -W -f='${Status} ${Version}' xe-guest-utilities 2>/dev/null \
+  | awk '$3 == "installed" { print $4 }')
+
+changed=0
+if [ -n "${have}" ] && dpkg --compare-versions "${have}" ge "${want}"; then
+  echo "xenman-guest-tools: ${have} installed, nothing to do"
+else
+  # apt rather than dpkg: it waits for the lock a running unattended-upgrade
+  # may hold instead of failing on it. The package has no dependencies, so
+  # nothing is downloaded.
+  if ! out=$(apt-get install -y -q -o DPkg::Lock::Timeout=600 \
+      -o Dpkg::Options::=--force-confold "${DEB}" 2>&1); then
+    echo "${out}" | tail -n 5 >&2
+    echo "xenman-guest-tools: installing ${want} failed" >&2
+    if [ "${START}" -eq 1 ] && [ -d "${DATA_DIR}" ]; then
+      "${NODE}" "${AUDIT_APPEND}" --file "${AUDIT_FILE}" --action os_guest_tools_installed \
+        --outcome failure --target "xe-guest-utilities ${want}" \
+        --detail "$(echo "${out}" | grep -E '^(E|dpkg):' | tail -n 2 | tr '\n' ' ')" 2>/dev/null || true
+    fi
+    exit 1
+  fi
+  changed=1
+  echo "xenman-guest-tools: installed ${want}${have:+ (was ${have})}"
+  if [ -n "${have}" ]; then detail="upgraded from ${have}"; else detail="first installation"; fi
+  if [ "${START}" -eq 1 ] && [ -d "${DATA_DIR}" ]; then
+    "${NODE}" "${AUDIT_APPEND}" --file "${AUDIT_FILE}" --action os_guest_tools_installed \
+      --outcome success --target "xe-guest-utilities ${want}" --detail "${detail}" 2>/dev/null || true
+  fi
+fi
+
+[ "${START}" -eq 1 ] || exit 0
+
+# The agent only means something on Xen; elsewhere its unit skips itself.
+# Restarted after an installation so the new version runs; otherwise only
+# started, which does nothing when it already is.
+systemctl enable "${AGENT_UNIT}" >/dev/null 2>&1 || true
+if [ "${changed}" -eq 1 ]; then action=restart; else action=start; fi
+systemctl "${action}" "${AGENT_UNIT}" || {
+  echo "xenman-guest-tools: ${AGENT_UNIT} did not start" >&2
+  exit 1
+}

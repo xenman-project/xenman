@@ -1,0 +1,498 @@
+#!/bin/bash
+set -uo pipefail
+
+# Installs a signed .xenup package. Runs as root, triggered either by the path
+# unit watching UPDATE_DIR/trigger (which is how the web interface asks) or by
+# hand:
+#
+#     xenman-updater /path/to/xenman-v1.9.0.xenup
+#     xenman-updater --allow-downgrade /path/to/older.xenup
+#
+# XenMan itself runs as the xenman user under ProtectSystem=strict and cannot
+# write /opt/xenman. That separation is the point: the web interface only drops
+# a file and a trigger, and this script decides -- against the release key --
+# whether anything gets installed. A stolen admin session cannot turn into root.
+#
+# A format 2 package also carries system files: the units, this updater, the
+# apt policy. Without that, the update mechanism could never update itself.
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/xenman}"
+BACKUP_DIR="${BACKUP_DIR:-/opt/xenman.bak}"
+STAGE_DIR="${STAGE_DIR:-/opt/xenman.new}"
+DATA_DIR="${DATA_DIR:-/var/lib/xenman}"
+UPDATE_DIR="${DATA_DIR}/updates"
+STATUS_FILE="${UPDATE_DIR}/status.json"
+TRIGGER_FILE="${UPDATE_DIR}/trigger"
+AUDIT_FILE="${DATA_DIR}/audit.jsonl"
+RELEASE_KEY="${RELEASE_KEY:-/etc/xenman/release-key.pub}"
+XENUP="${XENUP:-/usr/local/lib/xenman/xenup.js}"
+AUDIT_APPEND="${AUDIT_APPEND:-/usr/local/lib/xenman/audit-append.js}"
+DATA_WRITE="${DATA_WRITE:-$(dirname "${AUDIT_APPEND}")/data-write.js}"
+NODE="${NODE:-/usr/local/bin/node}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/auth/me}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
+# Where system files are installed, and where the ones they replace are kept.
+# The backup must be root-only: were it inside the xenman-writable data
+# directory, XenMan could plant files there and have a rollback install them
+# as root.
+SYSTEM_ROOT="${SYSTEM_ROOT:-/}"
+SYSTEM_BACKUP="${SYSTEM_BACKUP:-/var/backups/xenman-system}"
+# What is installed, for refusing downgrades. Root-owned and outside
+# /opt/xenman on purpose: a record XenMan could write is a record anyone who
+# compromises XenMan could backdate.
+RELEASE_RECORD="${RELEASE_RECORD:-/etc/xenman/installed-release}"
+OS_POLICY_BIN="${OS_POLICY_BIN:-/usr/local/sbin/xenman-os-policy}"
+# /tmp is tmpfs on Debian 13, and a package plus its unpacked members can
+# approach half the RAM of a 2 GB appliance. xenup.js follows TMPDIR too.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+CURRENT_VERSION=$(cat "${INSTALL_DIR}/.version" 2>/dev/null || echo "unknown")
+TARGET_VERSION="unknown"
+
+# ─── status and audit ────────────────────────────────────────────────────────
+
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ }"
+  s="${s//$'\r'/ }"
+  s="${s//$'\t'/ }"
+  printf '%s' "${s}"
+}
+
+# The web interface polls this file. It has to survive the service restart that
+# happens mid-update, which is why progress lives on disk and not in memory --
+# and it has to stay valid JSON when a message quotes an error, or the page
+# goes blank at exactly the moment someone is watching it.
+#
+# Written through data-write.js: XenMan owns UPDATE_DIR and could have put a
+# symlink where this file goes, and a plain "cat >" would write through it.
+write_status() {
+  local state="$1" message
+  message=$(json_escape "$2")
+  "${NODE}" "${DATA_WRITE}" write --file "${STATUS_FILE}" --mode 0644 <<EOF || echo "xenman-updater: could not write the status file" >&2
+{
+  "state": "${state}",
+  "message": "${message}",
+  "fromVersion": "$(json_escape "${CURRENT_VERSION}")",
+  "toVersion": "$(json_escape "${TARGET_VERSION}")",
+  "updatedAt": "$(date -Is)"
+}
+EOF
+  echo "xenman-updater: ${state}: $2"
+}
+
+# Appended directly, because the service that normally writes the audit log is
+# stopped for part of this. A code swap on a machine that manages hypervisors is
+# exactly the event the log exists for.
+write_audit() {
+  local outcome="$1" detail="$2"
+  [ -d "${DATA_DIR}" ] || return 0
+  "${NODE}" "${AUDIT_APPEND}" --file "${AUDIT_FILE}" --action appliance_update --target "${CURRENT_VERSION} -> ${TARGET_VERSION}" --outcome "${outcome}" --detail "${detail}" 2>/dev/null || true
+}
+
+# A package that failed -- a bad signature, a refused downgrade, a version that
+# did not come up -- must not stay offered for installation. The web interface
+# stages every package under this one name, and only this exact path is ever
+# deleted: the trigger's content is untrusted, and removing whatever path it
+# names would let it delete files anywhere, as root, via ".." or a directory
+# swapped for a symlink. A package given on the command line belongs to
+# whoever typed it and is left alone.
+STAGED_PACKAGE="${UPDATE_DIR}/pending.xenup"
+discard_staged() {
+  if [ "${PACKAGE:-}" = "${STAGED_PACKAGE}" ]; then
+    rm -f "${STAGED_PACKAGE}"
+  fi
+}
+
+fail() {
+  write_status failed "$1"
+  write_audit failure "$1"
+  rm -f "${TRIGGER_FILE}"
+  discard_staged
+  exit 1
+}
+
+# ─── system files ────────────────────────────────────────────────────────────
+
+sys_path() { printf '%s/%s' "${SYSTEM_ROOT%/}" "$1"; }
+
+# Only what XenMan ships may be replaced. The signature already guarantees the
+# files come from a release; this guarantees a release cannot, by mistake,
+# reach into the network configuration or anything else the operator owns.
+validate_system_tree() {
+  local stage="$1" rel
+  # xenup.js rejects anything but files and directories before unpacking;
+  # checked again here because this script is the one acting as root.
+  if [ -n "$(cd "${stage}" && find . ! -type f ! -type d)" ]; then
+    fail "system payload holds something other than files and directories"
+  fi
+  while IFS= read -r rel; do
+    case "${rel#./}" in
+      usr/local/sbin/*|usr/local/lib/xenman/*|etc/systemd/system/*|etc/apt/apt.conf.d/*) ;;
+      # Node.js, which apt does not update: the binary alone, nothing beside it.
+      usr/local/bin/node) ;;
+      *) fail "system payload reaches outside the paths XenMan owns: ${rel#./}" ;;
+    esac
+  done < <(cd "${stage}" && find . -type f)
+}
+
+# Each file is written beside its target and renamed over it, so a reader --
+# including this very script, should the package replace it -- only ever sees
+# the old file or the new one, never a half-written one. The running shell
+# keeps its handle on the old inode.
+install_system_files() {
+  local stage="$1" rel src dst mode units_changed=0
+  while IFS= read -r rel; do
+    rel="${rel#./}"
+    src="${stage}/${rel}"
+    dst=$(sys_path "${rel}")
+    if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
+      continue
+    fi
+    if [ -e "${dst}" ]; then
+      mkdir -p "$(dirname "${SYSTEM_BACKUP}/files/${rel}")"
+      cp -a "${dst}" "${SYSTEM_BACKUP}/files/${rel}" || return 1
+    else
+      echo "${rel}" >> "${SYSTEM_BACKUP}/created"
+    fi
+    # Mode from the package, minus setuid, setgid and sticky: nothing XenMan
+    # ships needs them, so none can be smuggled in.
+    mode=$(printf '%o' $(( 8#$(stat -c %a "${src}") & 8#755 )))
+    install -D -o root -g root -m "${mode}" "${src}" "${dst}.xenman-new" || return 1
+    mv -f "${dst}.xenman-new" "${dst}" || return 1
+    case "${rel}" in etc/systemd/*) units_changed=1 ;; esac
+  done < <(cd "${stage}" && find . -type f | sort)
+  if [ "${units_changed}" -eq 1 ]; then
+    systemctl daemon-reload
+  fi
+  enable_new_units || return 1
+  return 0
+}
+
+# A unit that is new with this package is enabled, the way a fresh .xva enables
+# it -- otherwise a release could add a service that never runs on appliances
+# that got it by update. A unit that existed before keeps whatever state it
+# had, so one the operator disabled on purpose stays disabled. Path, timer and
+# socket units are started too, since for them enabling alone waits for a boot.
+enable_new_units() {
+  local rel unit
+  while IFS= read -r rel; do
+    case "${rel}" in
+      etc/systemd/system/*.service|etc/systemd/system/*.path|etc/systemd/system/*.timer|etc/systemd/system/*.socket) ;;
+      *) continue ;;
+    esac
+    # Top-level units only: files in foo.service.d/ are drop-ins, not units.
+    [ "$(dirname "${rel}")" = "etc/systemd/system" ] || continue
+    grep -q '^\[Install\]' "$(sys_path "${rel}")" || continue
+    unit=$(basename "${rel}")
+    systemctl enable "${unit}" >/dev/null 2>&1 || return 1
+    echo "${unit}" >> "${SYSTEM_BACKUP}/enabled"
+    case "${unit}" in
+      *.path|*.timer|*.socket) systemctl start "${unit}" >/dev/null 2>&1 || return 1 ;;
+    esac
+  done < "${SYSTEM_BACKUP}/created"
+  return 0
+}
+
+restore_system_files() {
+  local rel dst unit
+  [ -d "${SYSTEM_BACKUP}" ] || return 0
+  # Units this run enabled go first, while their files still exist to be
+  # disabled -- removing the file first would leave dangling links behind.
+  if [ -f "${SYSTEM_BACKUP}/enabled" ]; then
+    while IFS= read -r unit; do
+      systemctl disable --now "${unit}" >/dev/null 2>&1
+    done < "${SYSTEM_BACKUP}/enabled"
+  fi
+  if [ -d "${SYSTEM_BACKUP}/files" ]; then
+    while IFS= read -r rel; do
+      rel="${rel#./}"
+      dst=$(sys_path "${rel}")
+      cp -a "${SYSTEM_BACKUP}/files/${rel}" "${dst}.xenman-old" \
+        && mv -f "${dst}.xenman-old" "${dst}"
+    done < <(cd "${SYSTEM_BACKUP}/files" && find . -type f)
+  fi
+  if [ -f "${SYSTEM_BACKUP}/created" ]; then
+    while IFS= read -r rel; do
+      rm -f "$(sys_path "${rel}")"
+    done < "${SYSTEM_BACKUP}/created"
+  fi
+  systemctl daemon-reload
+}
+
+# Puts back everything this run changed: the application if it was swapped,
+# and every system file. Used both when the new version fails its health check
+# and when a previous run was interrupted.
+rollback_all() {
+  systemctl stop xenman 2>/dev/null
+  if [ -f "${SYSTEM_BACKUP}/app-swapped" ] && [ -d "${BACKUP_DIR}" ]; then
+    rm -rf "${INSTALL_DIR}"
+    mv "${BACKUP_DIR}" "${INSTALL_DIR}"
+  fi
+  restore_system_files
+  rm -f "${SYSTEM_BACKUP}/pending" "${SYSTEM_BACKUP}/app-swapped"
+  systemctl start xenman
+}
+
+abort() {
+  echo "xenman-updater: $1 -- rolling back"
+  rollback_all
+  fail "$1"
+}
+
+# ─── recovery ────────────────────────────────────────────────────────────────
+
+# An update leaves a marker while it changes the appliance. Finding one means a
+# previous run was cut short -- power loss, a killed process -- and the
+# appliance may hold half of one version and half of another. Undo it before
+# anything else, so an interruption always lands back on the old version.
+if [ -f "${SYSTEM_BACKUP}/pending" ]; then
+  echo "xenman-updater: an interrupted update was found, rolling it back"
+  rollback_all
+  rm -f "${TRIGGER_FILE}"
+  write_status failed "an interrupted update was rolled back"
+  write_audit failure "an interrupted update was rolled back"
+  exit 1
+fi
+
+# Updates from before the marker existed only swapped /opt/xenman, as two
+# renames; a cut between them leaves no install directory at all.
+if [ ! -d "${INSTALL_DIR}" ] && [ -d "${BACKUP_DIR}" ]; then
+  echo "xenman-updater: ${INSTALL_DIR} missing, restoring the previous version"
+  mv "${BACKUP_DIR}" "${INSTALL_DIR}"
+  systemctl start xenman
+  write_status failed "an interrupted update was rolled back"
+  exit 1
+fi
+
+# ─── pick the package ────────────────────────────────────────────────────────
+
+# Only reachable from a root shell: the web interface triggers this script with
+# no arguments, so it can never ask for a downgrade.
+ALLOW_DOWNGRADE=0
+if [ "${1:-}" = "--allow-downgrade" ]; then
+  ALLOW_DOWNGRADE=1
+  shift
+fi
+
+if [ $# -ge 1 ]; then
+  PACKAGE="$1"
+else
+  [ -f "${TRIGGER_FILE}" ] || { echo "xenman-updater: nothing to do"; exit 0; }
+  PACKAGE="${UPDATE_DIR}/$(cat "${TRIGGER_FILE}")"
+fi
+
+# The trigger names a file inside UPDATE_DIR and nothing else; the web interface
+# writes it, so it is treated as untrusted input.
+case "${PACKAGE}" in
+  *..*) fail "package path must not contain .." ;;
+esac
+[ -f "${PACKAGE}" ] || fail "no such package: ${PACKAGE}"
+[ -f "${RELEASE_KEY}" ] || fail "no release key at ${RELEASE_KEY} -- updates are disabled"
+
+# Everything below works on a private copy. The original sits in a directory
+# XenMan can write, and nothing it could do to that file after this line
+# matters any more.
+WORK=$(mktemp -d --tmpdir="${TMPDIR}" xenman-updater.XXXXXXXX)
+trap 'rm -rf "${WORK}"' EXIT
+PKG="${WORK}/package.xenup"
+cp "${PACKAGE}" "${PKG}" || fail "could not read the package"
+
+# ─── verify ──────────────────────────────────────────────────────────────────
+
+write_status verifying "checking the package signature"
+
+MANIFEST=$("${NODE}" "${XENUP}" verify --file "${PKG}" --key "${RELEASE_KEY}" 2>&1) \
+  || fail "signature check failed: ${MANIFEST}"
+
+field() { echo "${MANIFEST}" | "${NODE}" -pe "JSON.parse(require('fs').readFileSync(0)).$1" 2>/dev/null; }
+TARGET_VERSION=$(field version || echo "unknown")
+MIN_NODE=$(field minNode || echo "0")
+FORMAT=$(field format || echo "1")
+BUILT_AT=$(field builtAt || echo "")
+COMMIT=$(field commit || echo "")
+
+NODE_MAJOR=$("${NODE}" -p "process.versions.node.split('.')[0]")
+MIN_MAJOR=${MIN_NODE%%.*}
+if [ "${NODE_MAJOR}" -lt "${MIN_MAJOR}" ]; then
+  fail "package needs Node ${MIN_NODE}, appliance has $(${NODE} --version) -- reinstall from a new .xva instead"
+fi
+
+# ─── downgrade protection ────────────────────────────────────────────────────
+
+# An older release is still genuinely signed, and may carry a vulnerability a
+# later one fixed. Installing it is the classic attack on signed updates, so it
+# is refused unless someone at a root shell asks for it explicitly.
+#
+# Compared by build time from the signed manifest, not by version name: names
+# are tags or commit hashes and do not sort. The same build may be reinstalled.
+read_record() {
+  RECORD="${RELEASE_RECORD}" FIELD="$1" "${NODE}" -e '
+    try {
+      const r = JSON.parse(require("fs").readFileSync(process.env.RECORD, "utf-8"));
+      process.stdout.write(String(r[process.env.FIELD] || ""));
+    } catch {}
+  ' 2>/dev/null
+}
+INSTALLED_BUILT=$(read_record builtAt)
+INSTALLED_NAME=$(read_record version)
+INSTALLED_COMMIT=$(read_record commit)
+
+if [ -z "${BUILT_AT}" ]; then
+  fail "package manifest carries no build time"
+fi
+# The same commit is the same code, whenever it was packed -- an .xva and a
+# package built from one commit minutes apart must not refuse each other.
+if [ -n "${INSTALLED_BUILT}" ] && { [ -z "${COMMIT}" ] || [ "${COMMIT}" != "${INSTALLED_COMMIT}" ]; }; then
+  IS_OLDER=$(A="${BUILT_AT}" B="${INSTALLED_BUILT}" "${NODE}" -p \
+    'Date.parse(process.env.A) < Date.parse(process.env.B)' 2>/dev/null || echo false)
+  if [ "${IS_OLDER}" = "true" ]; then
+    if [ "${ALLOW_DOWNGRADE}" -eq 1 ]; then
+      echo "xenman-updater: installing an older release on request (--allow-downgrade)"
+    else
+      fail "refusing ${TARGET_VERSION} (built ${BUILT_AT}): older than the installed ${INSTALLED_NAME} (built ${INSTALLED_BUILT}). To go back on purpose, run xenman-updater --allow-downgrade at a root shell."
+    fi
+  fi
+fi
+
+# ─── stage ───────────────────────────────────────────────────────────────────
+
+write_status installing "unpacking ${TARGET_VERSION}"
+
+rm -rf "${STAGE_DIR}"
+"${NODE}" "${XENUP}" verify --file "${PKG}" --key "${RELEASE_KEY}" \
+  --extract "${STAGE_DIR}" >/dev/null 2>&1 || fail "could not unpack the payload"
+echo "${TARGET_VERSION}" > "${STAGE_DIR}/.version"
+mkdir -p "${STAGE_DIR}/.next/cache"
+chown -R xenman:xenman "${STAGE_DIR}"
+
+SYS_STAGE="${WORK}/system"
+if [ "${FORMAT}" = "2" ]; then
+  "${NODE}" "${XENUP}" verify --file "${PKG}" --key "${RELEASE_KEY}" \
+    --extract-system "${SYS_STAGE}" >/dev/null 2>&1 || fail "could not unpack the system files"
+  validate_system_tree "${SYS_STAGE}"
+fi
+
+# A Node.js the package brings has to run here before it replaces the one
+# everything on this appliance runs on -- a binary for another libc or
+# architecture would leave nothing able to roll back. Tried from where it was
+# unpacked, before anything changes.
+NODE_BEFORE=$("${NODE}" -p process.version 2>/dev/null || echo "unknown")
+NODE_AFTER="${NODE_BEFORE}"
+if [ -f "${SYS_STAGE}/usr/local/bin/node" ]; then
+  NODE_AFTER=$("${SYS_STAGE}/usr/local/bin/node" -p process.version 2>/dev/null) \
+    || fail "the Node.js in the package does not run on this appliance"
+  case "${NODE_AFTER}" in
+    v[0-9]*) ;;
+    *) fail "the Node.js in the package does not run on this appliance" ;;
+  esac
+fi
+NODE_NOTE=""
+[ "${NODE_AFTER}" != "${NODE_BEFORE}" ] && NODE_NOTE=", Node.js ${NODE_BEFORE} -> ${NODE_AFTER}"
+
+# The data directory is never replaced, only copied aside: a new version may
+# migrate what is in it, and that is the only way back from a bad migration.
+# Root-only (it holds the password hashes and the key to the stored host
+# passwords), and written through data-write.js rather than by tar itself,
+# which would write through a symlink XenMan put at that name.
+DATA_BACKUP="${UPDATE_DIR}/data-before-${TARGET_VERSION}.tar.gz"
+tar -czf - -C "${DATA_DIR}" --exclude=./updates . 2>/dev/null \
+  | "${NODE}" "${DATA_WRITE}" write --file "${DATA_BACKUP}" --mode 0600 \
+  || echo "xenman-updater: could not write the data backup" >&2
+
+# ─── install ─────────────────────────────────────────────────────────────────
+
+# From here on the appliance changes, so the marker goes down first.
+rm -rf "${SYSTEM_BACKUP}"
+mkdir -p "${SYSTEM_BACKUP}/files"
+chmod 0700 "${SYSTEM_BACKUP}"
+: > "${SYSTEM_BACKUP}/created"
+: > "${SYSTEM_BACKUP}/enabled"
+touch "${SYSTEM_BACKUP}/pending"
+
+# System files before the application, so that a changed xenman.service is
+# already in effect when XenMan starts again below.
+if [ "${FORMAT}" = "2" ]; then
+  write_status installing "installing system files"
+  install_system_files "${SYS_STAGE}" || abort "could not install the system files"
+  # The maintenance-window timer is generated from the operator's policy by
+  # xenman-os-policy, which may itself have just been replaced; regenerate it
+  # now rather than wait for the next scheduled run to notice.
+  if [ -x "${OS_POLICY_BIN}" ]; then
+    "${OS_POLICY_BIN}" apply --quiet >/dev/null 2>&1 || true
+  fi
+  # A new release of the guest tools, if this package brings one. Not waited
+  # for: it may have to wait for apt's lock, and it changes nothing XenMan needs.
+  systemctl start --no-block xenman-guest-tools.service >/dev/null 2>&1 || true
+fi
+
+write_status installing "restarting XenMan"
+
+systemctl stop xenman
+rm -rf "${BACKUP_DIR}"
+mv "${INSTALL_DIR}" "${BACKUP_DIR}" || abort "could not move the current version aside"
+touch "${SYSTEM_BACKUP}/app-swapped"
+mv "${STAGE_DIR}" "${INSTALL_DIR}" || abort "could not put the new version in place"
+systemctl start xenman
+
+# ─── health check ────────────────────────────────────────────────────────────
+
+write_status restarting "waiting for XenMan to answer"
+
+healthy=0
+for _ in $(seq "${HEALTH_TIMEOUT}"); do
+  # Any HTTP response means the server is up; 401 without a session is a
+  # perfectly good sign of life.
+  if curl -sS -o /dev/null --max-time 5 "${HEALTH_URL}" 2>/dev/null; then
+    healthy=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "${healthy}" -ne 1 ]; then
+  echo "xenman-updater: no answer after ${HEALTH_TIMEOUT}s, rolling back"
+  rollback_all
+  write_status rolled-back "${TARGET_VERSION} did not come up; ${CURRENT_VERSION} restored"
+  write_audit failure "update to ${TARGET_VERSION} rolled back after failed health check"
+  rm -f "${TRIGGER_FILE}"
+  discard_staged
+  exit 1
+fi
+
+# ─── done ────────────────────────────────────────────────────────────────────
+
+# The commit point: without the marker, a later run no longer treats this one
+# as interrupted.
+rm -f "${SYSTEM_BACKUP}/pending" "${SYSTEM_BACKUP}/app-swapped"
+
+# Only now, after the health check: a rolled-back update must not move the
+# downgrade floor forward. Written beside the target and renamed, like the
+# system files, so it is never half-written.
+mkdir -p "$(dirname "${RELEASE_RECORD}")"
+REC_VERSION="${TARGET_VERSION}" REC_COMMIT="${COMMIT}" REC_BUILT="${BUILT_AT}" \
+REC_OUT="${RELEASE_RECORD}.xenman-new" "${NODE}" -e '
+  require("fs").writeFileSync(process.env.REC_OUT, JSON.stringify({
+    version: process.env.REC_VERSION,
+    commit: process.env.REC_COMMIT,
+    builtAt: process.env.REC_BUILT,
+    installedAt: new Date().toISOString(),
+  }, null, 2) + "\n");
+' && chmod 0644 "${RELEASE_RECORD}.xenman-new" \
+  && mv -f "${RELEASE_RECORD}.xenman-new" "${RELEASE_RECORD}"
+
+rm -f "${TRIGGER_FILE}"
+discard_staged
+write_status success "running ${TARGET_VERSION}"
+if [ "${ALLOW_DOWNGRADE}" -eq 1 ] && [ "${IS_OLDER:-false}" = "true" ]; then
+  write_audit success "downgraded from ${CURRENT_VERSION} to ${TARGET_VERSION} at a root shell${NODE_NOTE}"
+else
+  write_audit success "updated from ${CURRENT_VERSION} to ${TARGET_VERSION}${NODE_NOTE}"
+fi
+
+# The previous application stays in /opt/xenman.bak and the replaced system
+# files in the backup directory until the next update, so a manual rollback
+# needs no package and no network.
+echo "xenman-updater: previous version kept in ${BACKUP_DIR}"

@@ -1,0 +1,4 @@
+#!/bin/sh
+# When Debian security updates install on this appliance. See os-policy.js,
+# or run without arguments for usage.
+exec "${NODE:-/usr/local/bin/node}" "${OS_POLICY_JS:-/usr/local/lib/xenman/os-policy.js}" "$@"

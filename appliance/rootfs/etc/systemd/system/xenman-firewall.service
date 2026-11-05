@@ -1,0 +1,21 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# The access rules for the web interface (and SSH), loaded at boot before the
+# network is up; see /usr/local/sbin/xenman-firewall. Nothing to do while they
+# are switched off.
+
+[Unit]
+Description=XenMan access rules
+DefaultDependencies=no
+Before=network-pre.target xenman.service
+Wants=network-pre.target
+# After Debian's nftables.service, whose ruleset starts with "flush ruleset".
+After=local-fs.target nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/xenman-firewall apply
+
+[Install]
+WantedBy=multi-user.target

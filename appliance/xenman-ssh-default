@@ -1,0 +1,33 @@
+#!/bin/bash
+#
+# SSH is off on the appliance unless someone at the VM console switches it on
+# (console menu, "SSH access"). Appliances built before that had it on, with
+# root's factory password known to anyone who read the documentation. This
+# switches it off once, after the update that brings it; what the console menu
+# sets afterwards is left alone. Open sessions are not cut: stopping ssh.service
+# ends only the listener.
+
+set -u
+
+MARK="${MARK:-/etc/xenman/ssh-default-done}"
+SYSTEMCTL="${SYSTEMCTL:-systemctl}"
+NODE="${NODE:-/usr/local/bin/node}"
+AUDIT_APPEND="${AUDIT_APPEND:-/usr/local/lib/xenman/audit-append.js}"
+DATA_DIR="${DATA_DIR:-/var/lib/xenman}"
+
+[ -e "${MARK}" ] && exit 0
+
+was=off
+"${SYSTEMCTL}" is-active --quiet ssh.service && was=on
+"${SYSTEMCTL}" disable --now ssh.service ssh.socket >/dev/null 2>&1 || true
+
+mkdir -p "$(dirname "${MARK}")"
+date -Is > "${MARK}"
+
+if [ "${was}" = on ]; then
+  logger -t xenman "SSH switched off; switch it on in the VM console menu if needed" 2>/dev/null || true
+  "${NODE}" "${AUDIT_APPEND}" --file "${DATA_DIR}/audit.jsonl" --action ssh_disabled --outcome success \
+    --target appliance --detail "SSH is now off by default; it can be switched on in the VM console menu" \
+    >/dev/null 2>&1 || true
+fi
+exit 0

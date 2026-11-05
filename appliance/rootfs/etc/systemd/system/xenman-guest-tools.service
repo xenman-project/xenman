@@ -1,0 +1,13 @@
+# Managed by XenMan: replaced by appliance updates.
+#
+# Installs or upgrades the XenServer guest tools the appliance carries, then
+# starts the agent. Started by xenman-guest-tools.timer at boot, and by the
+# updater after an update; does nothing when the carried version is installed.
+
+[Unit]
+Description=Install the XenServer guest tools XenMan carries
+ConditionPathExists=/usr/local/lib/xenman/guest-tools/xe-guest-utilities.deb
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/xenman-guest-tools

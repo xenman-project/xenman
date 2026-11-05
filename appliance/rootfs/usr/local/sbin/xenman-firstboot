@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+# An .xva gets cloned, so anything that must be unique per copy is regenerated
+# on first boot rather than baked in. Runs once: the unit is conditional on the
+# marker file this script removes.
+
+ssh-keygen -A
+
+# systemd repopulates an empty /etc/machine-id itself; this only clears any
+# leftover from the build host.
+: > /etc/machine-id
+
+rm -f /var/lib/xenman-firstboot

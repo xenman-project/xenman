@@ -1,0 +1,3 @@
+#!/bin/sh
+# Who may reach the appliance's web interface (and SSH); see firewall.js.
+exec "${NODE:-/usr/local/bin/node}" "${FIREWALL_JS:-/usr/local/lib/xenman/firewall.js}" "$@"
