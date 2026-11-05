@@ -4,54 +4,17 @@ A modern web-based management interface for XenServer / XCP-ng hosts and virtual
 
 ## Features
 
-### Host & Pool Management
-- **Multi-Host Connections** — Connect to multiple XenServer/XCP-ng hosts or pools simultaneously
-- **Pool Operations** — Join standalone hosts to existing pools
-- **Host Monitoring** — Real-time CPU, memory, and uptime metrics
-- **Host Maintenance** — Enable/disable hosts, evacuate VMs, restart toolstack
-- **Coordinator Identification** — Pool coordinator marked with crown icon
+Many workflows follow XenCenter's, with its checks and texts, so XenMan feels familiar.
 
-### Virtual Machines
-- **VM Lifecycle** — Start, stop, reboot, suspend, resume, force-shutdown, and force-reboot
-- **VM Creation Wizard** — 6-step wizard with template selection, CPU/memory, disks, CD/DVD, network, and summary
-- **VM Settings** — Edit name, description, vCPUs, memory, boot order, firmware (UEFI/BIOS), network interfaces, disk sizes, and tags
-- **Live Migration** — Migrate running VMs between pool hosts with progress tracking
-- **VM Cloning** — Clone VMs from templates (default and custom)
-- **VM Deletion** — Delete with name confirmation dialog
-
-### VNC Console
-- **Browser-Based Console** — Full VNC access via WebSocket proxy
-- **Keyboard Macros** — Ctrl+Alt+Del, function keys, TTY switching (Ctrl+Alt+F1–F7)
-- **Clipboard Paste** — Paste text into VM via simulated keystrokes
-- **View Options** — Fullscreen, scale-to-fit, view-only mode
-- **Console Tuning** — Picture quality (when the host sends Tight), connection info with pictures per second, data rate and encoding
-
-### Storage
-- **Disk Management** — Create, resize (online), and delete VM disks
-- **Storage Repositories** — View SRs with capacity and usage details
-- **ISO Library** — Attach/eject ISO images as CD/DVD drives
-
-### Networking
-- **Network Overview** — View all available networks with bridge and MTU details
-- **Physical Interfaces (PIFs)** — Bond-aware display with IP, VLAN, and MAC info
-- **Virtual Interfaces (VIFs)** — Attach, detach, plug, and unplug VM network adapters
-
-### User Management
-- **Role-Based Access** — Three roles: Admin (full access), Operator (VM operations), Viewer (read-only)
-- **User Invitations** — Create users without a password; an invite email is sent automatically when an email address is provided
-- **Password Reset** — Self-service "Forgot password?" flow via email link
-- **Password Policy** — Minimum length, uppercase, lowercase, and digit requirements
-
-### Settings
-- **SMTP Configuration** — Configure mail server with STARTTLS/SSL, certificate validation, and test email
-- **Sidebar Preferences** — Flat/tree layout, hosts-only/VMs-only/both views, dropdown/filter search
-- **Auto-Refresh** — Toggleable 15-second live polling of host and VM data
-
-### General
-- **Real-Time Events** — XAPI event polling for live status updates
-- **Task Tracking** — Progress bars and status for long-running async operations (migration, creation, evacuation)
-- **Dark Mode** — Light, dark, and system theme support
-- **Dashboard** — Summary cards for hosts, VMs, CPU, and memory with quick-action buttons
+- **Pools & hosts** — several pools at once, maintenance mode, add and remove servers, control domain memory, certificate pinning
+- **VMs** — create, start/stop, migrate, clone, delete; edit CPU, memory, disks, network and boot settings
+- **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
+- **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs and disks; networks, bonds, VLANs and the management interface
+- **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types
+- **Updates & licensing** — host updates with mail notification, License Manager, Workload Balancing
+- **Monitoring** — performance graphs, alerts, events and an audit log
+- **Users** — Admin / Operator / Viewer roles, invitations and password reset by mail, inactivity sign-out
+- **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
 ## Tech Stack
 
