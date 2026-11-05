@@ -100,7 +100,28 @@ Builds the image from this repository. The container exposes port `3000` (HTTP) 
 
 ### Appliance
 
-The appliance (`appliance/`) is installed and updated by hand: an update is a signed `.xenup` package uploaded under Settings → Appliance.
+XenMan also comes as a ready-to-import XenServer VM: Debian 13 with XenMan running under systemd, delivered as a single `.xva` file. It is built from this repository on any Debian or Ubuntu machine — no XenServer host needed:
+
+```bash
+sudo ./appliance/build-appliance.sh      # → dist/xenman-appliance-<tag>.xva
+```
+
+Import it with `xe vm-import filename=xenman-appliance-<tag>.xva` or in XenCenter under *File → Import*, then start the VM. The console shows the address it got by DHCP.
+
+| | |
+|---|---|
+| Web | `https://<address>/` — login `admin` / `admin`, a new password is required first |
+| Console | `root` / `xenman` — a password change is forced at first login; then a menu for network, SSH, restarts and resetting an administrator's password |
+| Network | DHCP or static, set under Settings → Appliance → Network (applied on probation, so a typo cannot lock you out) |
+| Data | `/var/lib/xenman` |
+
+Updates come in three kinds:
+
+- **XenMan** — by hand: a signed `.xenup` package, built with `appliance/build-update.sh` and uploaded under Settings → Appliance. The appliance checks the signature against the release key it was built with.
+- **Debian security updates** — installed by `unattended-upgrades` in a maintenance window you set.
+- **Debian or Node.js major versions** — a new appliance; the data directory is copied across.
+
+Building, signing keys, proxies and the `.xva` format are described in [appliance/README.md](appliance/README.md).
 
 ### Manual
 
