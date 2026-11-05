@@ -25,6 +25,10 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Console**: noVNC (WebSocket proxy)
 - **Email**: Nodemailer (SMTP)
 
+## Built with AI
+
+XenMan is developed with an AI coding assistant: much of the code, the tests and this documentation were written by AI, directed by its maintainers and tested on real XenServer pools. Where XenMan behaves like XenCenter, that behaviour is taken from XenAdmin's published source rather than guessed. As with any tool that manages production infrastructure, try it on a test pool first.
+
 ## Getting Started
 
 ### Prerequisites
