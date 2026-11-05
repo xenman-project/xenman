@@ -22,8 +22,6 @@ XenMan covers everyday pool and VM administration. Not yet included, among other
 
 ## Screenshots
 
-Taken against a simulated pool.
-
 <table>
   <tr>
     <td width="50%"><a href="docs/screenshots/pool.png"><img src="docs/screenshots/pool.png" alt="Pool overview"></a><br>Pool overview</td>
