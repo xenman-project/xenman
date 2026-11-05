@@ -16,6 +16,8 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Users** — Admin / Operator / Viewer roles, invitations and password reset by mail, inactivity sign-out
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
+XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, VM import, cross-pool and storage migration, vGPU assignment to VMs, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
+
 ## Tech Stack
 
 - **Framework**: Next.js 16 (React 19, TypeScript)
