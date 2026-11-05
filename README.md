@@ -2,6 +2,8 @@
 
 A modern web-based management interface for XenServer / XCP-ng hosts and virtual machines. Built with Next.js, it provides real-time monitoring, VM lifecycle management, and browser-based VNC console access.
 
+![XenMan start page](docs/screenshots/dashboard.png)
+
 ## Features
 
 Many workflows follow XenCenter's, with its checks and texts, so XenMan feels familiar.
@@ -17,6 +19,29 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
 XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, VM import, cross-pool and storage migration, vGPU assignment to VMs, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
+
+## Screenshots
+
+Taken against a simulated pool.
+
+<table>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/pool.png"><img src="docs/screenshots/pool.png" alt="Pool overview"></a><br>Pool overview</td>
+    <td width="50%"><a href="docs/screenshots/pool-memory.png"><img src="docs/screenshots/pool-memory.png" alt="Memory, as in XenCenter"></a><br>Memory, as in XenCenter</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/pool-gpu.png"><img src="docs/screenshots/pool-gpu.png" alt="GPUs and vGPU capacity"></a><br>GPUs and vGPU capacity</td>
+    <td width="50%"><a href="docs/screenshots/pool-updates.png"><img src="docs/screenshots/pool-updates.png" alt="XenServer updates"></a><br>XenServer updates</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/host-network.png"><img src="docs/screenshots/host-network.png" alt="Host networking"></a><br>Host networking</td>
+    <td width="50%"><a href="docs/screenshots/vm.png"><img src="docs/screenshots/vm.png" alt="A virtual machine"></a><br>A virtual machine</td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="docs/screenshots/dark-dashboard.png"><img src="docs/screenshots/dark-dashboard.png" alt="Dark theme"></a><br>Dark theme</td>
+    <td width="50%"></td>
+  </tr>
+</table>
 
 ## Tech Stack
 

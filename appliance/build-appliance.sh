@@ -285,7 +285,7 @@ in_chroot sh -c '
   mkdir -p "$dst/node_modules" "$dst/.next/cache"
   cp -r "$src/node_modules/ws" "$dst/node_modules/ws"
   rm -rf "$dst/data" "$dst/src" "$dst/appliance" "$dst/Dockerfile" \
-         "$dst/docker-compose.yml" "$dst/README.md"
+         "$dst/docker-compose.yml" "$dst/README.md" "$dst/docs"
 '
 
 # Sources plus the npm cache would add roughly a gigabyte to the .xva.

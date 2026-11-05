@@ -100,7 +100,7 @@ mkdir -p "${PAYLOAD}/node_modules" "${PAYLOAD}/.next/cache"
 cp -r "${SRC}/node_modules/ws" "${PAYLOAD}/node_modules/ws"
 rm -rf "${PAYLOAD}/data" "${PAYLOAD}/src" "${PAYLOAD}/appliance" \
        "${PAYLOAD}/Dockerfile" "${PAYLOAD}/docker-compose.yml" \
-       "${PAYLOAD}/README.md"
+       "${PAYLOAD}/README.md" "${PAYLOAD}/docs"
 
 # The system files ride along, so an update can replace the updater, its units
 # and the apt policy too. Taken from the archived HEAD like the application,
