@@ -35,23 +35,23 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
             type=sha,enable=${{ github.event_name != 'push' }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ env.PUBLISH == 'true' }}
@@ -64,10 +64,10 @@ jobs:
     runs-on: ubuntu-24.04
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Build and sign
@@ -84,7 +84,7 @@ jobs:
           node appliance/xenup.js verify --file "$f" --key appliance/release-key.pub > /dev/null
           echo "signature valid: $(basename "$f")"
           (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: xenup
           path: dist/*.xenup*
@@ -94,7 +94,7 @@ jobs:
     name: Appliance (.xva)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Make room
@@ -114,35 +114,47 @@ jobs:
           f=$(ls dist/*.xva)
           (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: xva
           path: dist/*.xva*
           retention-days: 3
           compression-level: 0
 
+  # Runs on a dry run too, up to the notes, so publishing is tested before a tag needs it.
   release:
     name: Publish release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [docker, xenup, xva]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      - name: Release notes
+        run: |
+          # The version the builds named their files after: the tag, or the commit on a dry run.
+          xva=$(ls dist/xenman-appliance-*.xva); name=${xva#dist/xenman-appliance-}; name=${name%.xva}
+          for f in "xenman-appliance-$name.xva" "xenman-appliance-$name.xva.sha256" "xenman-$name.xenup" "xenman-$name.xenup.sha256"; do
+            [ -s "dist/$f" ] || { echo "missing: $f"; exit 1; }
+          done
+          (cd dist && sha256sum -c "xenman-appliance-$name.xva.sha256" "xenman-$name.xenup.sha256")
+          xva_sha=$(cut -d' ' -f1 "dist/xenman-appliance-$name.xva.sha256")
+          xenup_sha=$(cut -d' ' -f1 "dist/xenman-$name.xenup.sha256")
+          sed -e "s/{{TAG}}/$name/g" -e "s/{{XVA_SHA256}}/$xva_sha/g" -e "s/{{XENUP_SHA256}}/$xenup_sha/g" \
+            -e "s#{{IMAGE}}#ghcr.io/${GITHUB_REPOSITORY}:$name#g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Create the release
+        if: env.PUBLISH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          xva_sha=$(cut -d' ' -f1 dist/xenman-appliance-"$TAG".xva.sha256)
-          xenup_sha=$(cut -d' ' -f1 dist/xenman-"$TAG".xenup.sha256)
-          sed -e "s/{{TAG}}/$TAG/g" -e "s/{{XVA_SHA256}}/$xva_sha/g" -e "s/{{XENUP_SHA256}}/$xenup_sha/g" \
-            -e "s#{{IMAGE}}#ghcr.io/${GITHUB_REPOSITORY}:$TAG#g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          [ "$NAME" = "$TAG" ] || { echo "files are named $NAME, the tag is $TAG"; exit 1; }
           prerelease=""; case "$TAG" in *-*) prerelease="--prerelease";; esac
           gh release create "$TAG" --verify-tag --title "XenMan ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes $prerelease \
             dist/xenman-appliance-"$TAG".xva dist/xenman-appliance-"$TAG".xva.sha256 \
