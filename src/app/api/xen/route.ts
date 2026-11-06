@@ -130,6 +130,7 @@ import { buildGpuOverview } from "@/lib/xen-gpu";
 import { buildMemoryOverview } from "@/lib/xen-memory";
 import { busyVm, getVmMemoryJob, needsReboot, startVmMemoryChange, valuesProblem } from "@/lib/vm-memory-job";
 import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReason, loadCopyRecords, startCopy, uniqueName } from "@/lib/vm-copy";
+import { finishImport, ImportRefused, importTargets, loadImportRecords } from "@/lib/vm-import";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -811,7 +812,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
-  "vm_copy_check", "vm_snapshot_to_template_check",
+  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -2955,6 +2956,33 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ taskRef });
       }
 
+      case "vm_import_targets": {
+        // XenCenter's Import wizard for an XVA: home servers and the SRs a VM may go to (lib/vm-import.ts).
+        const affinity = isXenRef(body.affinity) ? body.affinity : null;
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        return NextResponse.json(importTargets(await loadImportRecords(call), affinity));
+      }
+
+      case "vm_import_finish": {
+        // After the upload (/api/xen/import): the interfaces to their networks, then start if asked.
+        if (!isXenRef(vmRef) || !isXenRef(body.importTask)) return NextResponse.json({ error: "No import given" }, { status: 400 });
+        const chosen: Record<string, string> = {};
+        if (body.networks && typeof body.networks === "object") {
+          for (const [vif, net] of Object.entries(body.networks as Record<string, unknown>)) {
+            if (!isXenRef(vif) || !isXenRef(net)) return NextResponse.json({ error: "Unknown network" }, { status: 400 });
+            chosen[vif] = net;
+          }
+        }
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        try {
+          const taskRef = await finishImport({ poolId, address: host, port, useSsl, sessionRef }, vmRef, body.importTask, chosen, body.start === true);
+          return NextResponse.json({ taskRef });
+        } catch (err) {
+          if (err instanceof ImportRefused) return NextResponse.json({ error: err.message }, { status: 409 });
+          throw err;
+        }
+      }
+
       case "vm_convert_to_template": {
         // XenCenter's Convert to Template: asked first, as it cannot be undone.
         if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
@@ -3298,6 +3326,9 @@ interface XenActionFields {
   // Copying a VM, templates from VMs and snapshots.
   snapshotRef?: unknown;
   confirm?: unknown;
+  // Import.
+  networks?: unknown;
+  start?: unknown;
   // Workload Balancing; its passwords are deliberately not listed here.
   wlbUrl?: unknown;
   wlbUsername?: unknown;
@@ -3472,6 +3503,10 @@ function auditDetail(f: XenActionFields): string | undefined {
     parts.push(`snapshot=${describeRef("VM", f.snapshotRef) ?? f.snapshotRef}`);
   }
   if (f.action === "vm_convert_to_template" && f.confirm === true) parts.push("confirmed");
+  if (f.action === "vm_import_finish") {
+    const n = f.networks && typeof f.networks === "object" ? Object.keys(f.networks as object).length : 0;
+    parts.push(`interfaces=${n}`, f.start === true ? "start" : "no start");
+  }
   if (f.action === "host_control_domain_memory") {
     parts.push(`memory=${String(f.memory)}`);
     if (f.confirmReboot === true) parts.push("reboot confirmed");

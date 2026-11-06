@@ -53,6 +53,7 @@ import {
   XCircle,
   Wrench,
   Plus,
+  Upload,
   Loader2,
   RefreshCw,
   Info,
@@ -74,6 +75,7 @@ import { takePendingPoolTab } from "@/components/xen-updates-overview";
 import type { HostConnection } from "@/lib/types";
 import { VmPowerState, XenHostRecord } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
+import { ImportVmDialog } from "@/components/vm/import-vm-dialog";
 
 const VM_COLORS = [
   "bg-blue-500",
@@ -581,6 +583,7 @@ export function HostDetail() {
   const isAdmin = role === "admin";
   const [createVmOpen, setCreateVmOpen] = useState(false);
   const [addServerOpen, setAddServerOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   // Opened from the dashboard's update card: straight on the Updates tab.
   const [firstTab] = useState(() => takePendingPoolTab() ?? "overview");
 
@@ -693,7 +696,23 @@ export function HostDetail() {
                     New VM
                   </Button>
                 )}
+                {/* XenCenter: File > Import, for an XVA. */}
+                {canAct && (
+                  <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+                    <Upload className="mr-1.5 h-3.5 w-3.5" />
+                    Import
+                  </Button>
+                )}
               </div>
+            )}
+            {importOpen && (
+              <ImportVmDialog
+                conn={conn}
+                hostId={hostId}
+                poolName={pool?.nameLabel || conn.host.name}
+                onClose={() => setImportOpen(false)}
+                onDone={() => void refreshHost(hostId)}
+              />
             )}
             {addServerOpen && (
               <AddServerDialog

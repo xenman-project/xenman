@@ -72,6 +72,7 @@ export const config = {
   // request make the appliance buffer that much before anyone checked who sent
   // it. The route does not need this gate: it requires an admin itself, which
   // is stricter than the valid session checked here, and streams the package
-  // to disk under its own limit.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/update$).*)"],
+  // to disk under its own limit. /api/xen/import likewise: an XVA is passed on
+  // to XenServer as it arrives, and the route checks the session itself.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/update$|api/xen/import$).*)"],
 };

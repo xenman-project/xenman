@@ -169,3 +169,49 @@ export function xenFetch(
     req.end(init.body);
   });
 }
+
+/**
+ * An HTTP PUT of a stream to a host of the pool -- XAPI's /import, the way
+ * XenCenter uploads an XVA (HTTP_actions.put_import) -- through the same
+ * certificate check as every other request. With its length: XAPI hangs up on
+ * a body sent in chunks. Resolves with the answer's status once XAPI has taken
+ * the whole body; how the import went, the task says.
+ */
+export function xenPutStream(
+  url: string,
+  body: NodeJS.ReadableStream,
+  length: number,
+  poolId: string,
+  signal?: AbortSignal,
+): Promise<{ status: number; text: string }> {
+  const u = new URL(url);
+  const secure = u.protocol === "https:";
+  return new Promise((resolve, reject) => {
+    const req = (secure ? https : http).request(
+      u,
+      {
+        method: "PUT",
+        headers: { "Content-Length": String(length), "Content-Type": "application/octet-stream" },
+        // Not kept alive: one long upload, its connection not to be reused.
+        agent: secure ? new PinnedAgent((address, cert) => checkCertificate(poolId, address, cert), false) : undefined,
+        signal,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("error", (err) => reject(new Error("upload failed", { cause: err })));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf-8") }));
+      },
+    );
+    // XenCenter's HTTP_PUT_TIMEOUT, as inactivity: a host that takes nothing
+    // and says nothing for this long is not going to finish the import.
+    req.setTimeout(10 * 60_000, () => req.destroy(new Error(`${u.hostname} did not answer`)));
+    req.on("error", (err) => {
+      if (err && (err as { code?: string }).code === "CERT_CHANGED") reject(err);
+      else if (err?.name === "AbortError" || signal?.aborted) reject(signal?.reason ?? err);
+      else reject(new Error(`The upload to ${u.hostname} failed: ${err.message}`, { cause: err }));
+    });
+    body.on("error", (err) => req.destroy(err as Error));
+    body.pipe(req);
+  });
+}

@@ -43,6 +43,7 @@ import {
   FolderOpen,
   FolderX,
   FolderPlus,
+  Upload,
   PowerOff,
   Bell,
   Unlink,
@@ -130,6 +131,7 @@ import { useTheme } from "@/context/theme-context";
 import { VmPowerState, XenVM, XenHostRecord } from "@/lib/types";
 import { VmSettingsDialog } from "@/components/vm-settings-dialog";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
+import { ImportVmDialog } from "@/components/vm/import-vm-dialog";
 
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
@@ -1393,6 +1395,7 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
   const [licenseOpen, setLicenseOpen] = useState(false);
   // Add Server (pool) and Remove From Pool (host), as XenCenter's Pool and Server menus.
   const [addServerPoolId, setAddServerPoolId] = useState<string | null>(null);
+  const [importPoolId, setImportPoolId] = useState<string | null>(null);
   const [removing, setRemoving] = useState<{ hostId: string; ref: string; name: string; poolName: string } | null>(null);
   const [newFolderPoolId, setNewFolderPoolId] = useState<string | null>(null);
   const [draggingVm, setDraggingVm] = useState<DraggingVm | null>(null);
@@ -1979,6 +1982,10 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
                         <Plus className="h-4 w-4" />
                         New VM
                       </ContextMenuItem>
+                      <ContextMenuItem onClick={() => setImportPoolId(host.id)}>
+                        <Upload className="h-4 w-4" />
+                        Import
+                      </ContextMenuItem>
                       <ContextMenuItem onClick={() => setNewFolderPoolId(host.id)}>
                         <FolderPlus className="h-4 w-4" />
                         New Folder
@@ -2187,6 +2194,17 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
       )}
 
       {licenseOpen && <LicenseManagerDialog onClose={() => setLicenseOpen(false)} />}
+
+      {/* Import an XVA into a pool */}
+      {importPoolId && state.connections[importPoolId]?.status === "connected" && (
+        <ImportVmDialog
+          conn={state.connections[importPoolId]}
+          hostId={importPoolId}
+          poolName={Object.values(state.connections[importPoolId].pools)[0]?.nameLabel || state.connections[importPoolId].host.name}
+          onClose={() => setImportPoolId(null)}
+          onDone={() => void refreshHost(importPoolId)}
+        />
+      )}
 
       {/* Add New Server to a pool */}
       {addServerPoolId && state.connections[addServerPoolId]?.status === "connected" && (
