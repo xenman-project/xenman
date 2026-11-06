@@ -9,7 +9,7 @@ A modern web-based management interface for XenServer / XCP-ng hosts and virtual
 Many workflows follow XenCenter's, with its checks and texts, so XenMan feels familiar.
 
 - **Pools & hosts** — several pools at once, maintenance mode, add and remove servers, control domain memory, certificate pinning
-- **VMs** — create, start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings
+- **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings
 - **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
 - **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs and disks; networks, bonds, VLANs and the management interface
 - **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types
@@ -18,7 +18,7 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Users** — Admin / Operator / Viewer roles, invitations and password reset by mail, inactivity sign-out
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
-XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, VM import, cross-pool and storage migration, vGPU assignment to VMs, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
+XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, OVF import, cross-pool and storage migration, vGPU assignment to VMs, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
 
 ## Screenshots
 
