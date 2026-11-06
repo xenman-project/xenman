@@ -853,6 +853,22 @@ const ADMIN_ONLY_ACTIONS = new Set([
 
 const isXenRef = (r: unknown): r is string => typeof r === "string" && /^OpaqueRef:[\w-]+$/.test(r);
 
+// The SSH exports run `xe` in a shell on a pool host as root, with values the
+// browser sends: each is checked to be what it claims, then quoted.
+const isUuid = (v: unknown): v is string =>
+  typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+/** An absolute directory of plain characters, no "..": or null. Trailing slashes dropped. */
+function exportDirOf(v: unknown): string | null {
+  if (typeof v !== "string" || v.length > 1024) return null;
+  const dir = v.trim().replace(/\/+$/, "");
+  if (!/^\/[A-Za-z0-9._ \/-]*$/.test(dir) || dir.split("/").includes("..")) return null;
+  return dir;
+}
+/** A word for sh: in single quotes, which nothing inside can end. */
+const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+/** The file name part from a VM's or disk's name: plain characters only. */
+const exportFileStem = (v: unknown) => (typeof v === "string" && v ? v : "export").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 100);
+
 /** The data sources a graph asks for with its data: none, or a short checked list. */
 function parseSourceRequests(input: unknown): SourceRequest[] | null {
   if (input === undefined) return [];
@@ -2823,24 +2839,27 @@ async function dispatch(request: NextRequest) {
         if (!vdiHost) {
           return NextResponse.json({ error: "Host not found" }, { status: 404 });
         }
+        if (!isUuid(vdiUuid)) return NextResponse.json({ error: "Not a disk UUID" }, { status: 400 });
+        const vdiDir = exportDirOf(vdiExportDir);
+        if (!vdiDir) {
+          return NextResponse.json({ error: "The export directory must be an absolute path of letters, digits, spaces and . _ - /" }, { status: 400 });
+        }
         const vdiTs = new Date().toISOString().replace(/[T:]/g, "-").replace(/\..+/, "");
-        const vdiSafeName = (vdiName as string).replace(/[^a-zA-Z0-9_-]/g, "_");
-        const vdiDir = (vdiExportDir as string).replace(/\/$/, "");
-        const vdiTargetPath = `${vdiDir}/${vdiSafeName}_${vdiTs}.raw`;
-        const vdiJobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-        sshExportJobs.set(vdiJobId, { status: "running", targetPath: vdiTargetPath, startedAt: Date.now() });
-        const vdiTarget = (vdiSshHost as string) || vdiHost.address;
+        const vdiTargetPath = `${vdiDir}/${exportFileStem(vdiName)}_${vdiTs}.raw`;
+        const vdiTarget = (typeof vdiSshHost === "string" && vdiSshHost) || vdiHost.address;
         // Only a host of this pool: the address comes from the browser.
         if (!knownAddresses(vdiHost.id).some((a) => a.toLowerCase() === vdiTarget.toLowerCase())) {
           return NextResponse.json({ error: `${vdiTarget} is not a known host of this pool` }, { status: 400 });
         }
+        const vdiJobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+        sshExportJobs.set(vdiJobId, { status: "running", targetPath: vdiTargetPath, startedAt: Date.now() });
         runSshCommand(
           vdiHost.id,
           vdiTarget,
           vdiHost.sshPort || 22,
           vdiHost.username,
           vdiHost.password,
-          `xe vdi-export uuid=${vdiUuid as string} filename=${vdiTargetPath} format=raw`,
+          `xe vdi-export uuid=${vdiUuid} filename=${shellQuote(vdiTargetPath)} format=raw`,
           vdiJobId,
         );
         return NextResponse.json({ jobId: vdiJobId, targetPath: vdiTargetPath });
@@ -2857,24 +2876,27 @@ async function dispatch(request: NextRequest) {
         if (!exportHost) {
           return NextResponse.json({ error: "Host not found" }, { status: 404 });
         }
+        if (!isUuid(vmUuid)) return NextResponse.json({ error: "Not a VM UUID" }, { status: 400 });
+        const dir = exportDirOf(exportDir);
+        if (!dir) {
+          return NextResponse.json({ error: "The export directory must be an absolute path of letters, digits, spaces and . _ - /" }, { status: 400 });
+        }
         const ts = new Date().toISOString().replace(/[T:]/g, "-").replace(/\..+/, "");
-        const safeName = (vmName as string).replace(/[^a-zA-Z0-9_-]/g, "_");
-        const dir = (exportDir as string).replace(/\/$/, "");
-        const targetPath = `${dir}/${safeName}_${ts}.xva`;
-        const jobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-        sshExportJobs.set(jobId, { status: "running", targetPath, startedAt: Date.now() });
-        const exportTarget = (sshHost as string) || exportHost.address;
+        const targetPath = `${dir}/${exportFileStem(vmName)}_${ts}.xva`;
+        const exportTarget = (typeof sshHost === "string" && sshHost) || exportHost.address;
         // Only a host of this pool: the address comes from the browser.
         if (!knownAddresses(exportHost.id).some((a) => a.toLowerCase() === exportTarget.toLowerCase())) {
           return NextResponse.json({ error: `${exportTarget} is not a known host of this pool` }, { status: 400 });
         }
+        const jobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+        sshExportJobs.set(jobId, { status: "running", targetPath, startedAt: Date.now() });
         runSshCommand(
           exportHost.id,
           exportTarget,
           exportHost.sshPort || 22,
           exportHost.username,
           exportHost.password,
-          `xe vm-export vm=${vmUuid as string} filename=${targetPath}`,
+          `xe vm-export vm=${vmUuid} filename=${shellQuote(targetPath)}`,
           jobId,
         );
         return NextResponse.json({ jobId, targetPath });
