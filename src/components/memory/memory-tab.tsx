@@ -176,7 +176,7 @@ function VmRow({ row, onEdit }: { row: VmMemoryRow; onEdit?: () => void }) {
             {onEdit && (
               <div className="mb-2 flex justify-end">
                 <Button variant="outline" size="sm" onClick={onEdit}>
-                  Edit...
+                  Edit
                 </Button>
               </div>
             )}

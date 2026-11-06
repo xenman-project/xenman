@@ -809,11 +809,11 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                   {/* CopyVMCommand / ConvertVMToTemplateCommand: a VM that is shut down. */}
                   <DropdownMenuItem disabled={vm.powerState !== "Halted"} onClick={() => setCopyOpen(true)}>
                     <Copy className="h-4 w-4" />
-                    <span className="ml-2">Copy VM...</span>
+                    <span className="ml-2">Copy VM</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem disabled={vm.powerState !== "Halted"} onClick={() => setConvertOpen(true)}>
                     <LayoutTemplate className="h-4 w-4" />
-                    <span className="ml-2">Convert to Template...</span>
+                    <span className="ml-2">Convert to Template</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

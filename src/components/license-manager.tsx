@@ -250,7 +250,7 @@ export function LicenseManagerDialog({ onClose }: { onClose: () => void }) {
         <DialogFooter className="border-t px-6 py-3 sm:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" disabled={!canAssign || updating} onClick={() => setAssignOpen(true)}>
-              Assign License...
+              Assign License
             </Button>
             <Button variant="outline" disabled={!canRelease || updating} onClick={() => setConfirmRelease(true)}>
               Release License

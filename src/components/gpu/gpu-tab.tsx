@@ -84,7 +84,7 @@ export function GpuTab({ conn, hostRef, isAdmin = false }: { conn: HostConnectio
             <span>{data.placement}</span>
             {placementEditable && (
               <Button variant="outline" size="sm" onClick={() => setEditPlacement(true)}>
-                Edit...
+                Edit
               </Button>
             )}
           </CardContent>
@@ -269,7 +269,7 @@ function GpuRowCard({
                 </>
               )}
               <Button variant="outline" size="sm" disabled={!chosen.length} onClick={() => onEdit(chosen)}>
-                {all.length > 1 ? "Edit Selected GPUs..." : "Edit..."}
+                {all.length > 1 ? "Edit Selected GPUs" : "Edit"}
               </Button>
             </div>
           )}

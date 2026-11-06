@@ -265,7 +265,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                 {data && due && (
                   <Button size="sm" onClick={() => setDialogOpen(true)} disabled={running || jobRunning}>
                     <Download className="mr-2 h-4 w-4" />
-                    {hostRef ? "Update this host…" : "Update pool…"}
+                    {hostRef ? "Update this host" : "Update pool"}
                   </Button>
                 )}
               </div>

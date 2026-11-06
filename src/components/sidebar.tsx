@@ -459,11 +459,11 @@ function VmButton({
               {/* XenCenter's Copy VM... and Convert to Template...: a VM that is shut down. */}
               <ContextMenuItem disabled={vm.powerState !== "Halted" || !fullConn} onClick={() => setCopyOpen(true)}>
                 <Copy className="h-4 w-4" />
-                Copy VM...
+                Copy VM
               </ContextMenuItem>
               <ContextMenuItem disabled={vm.powerState !== "Halted" || !fullConn} onClick={() => setConvertOpen(true)}>
                 <LayoutTemplate className="h-4 w-4" />
-                Convert to Template...
+                Convert to Template
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem onClick={() => setSettingsOpen(true)}>
@@ -1988,7 +1988,7 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
                           <ContextMenuSeparator />
                           <ContextMenuItem onClick={() => setAddServerPoolId(host.id)}>
                             <ServerCog className="h-4 w-4" />
-                            Add Server...
+                            Add Server
                           </ContextMenuItem>
                         </>
                       )}
