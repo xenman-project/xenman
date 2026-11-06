@@ -1,8 +1,6 @@
 services:
   xenman:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/xenman-project/xenman:latest
     container_name: xenman
     ports:
       - "3000:3000"

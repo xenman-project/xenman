@@ -88,7 +88,9 @@ Host configurations, passwords, and JWT secrets are stored in the `data/` direct
 docker compose up -d
 ```
 
-Builds the image from this repository. The container exposes port `3000` (HTTP) and `3001` (HTTPS) and persists data in a `xen-data` volume.
+Runs the published image `ghcr.io/xenman-project/xenman` (`:latest`, or a release such as `:v1.0.1`). The container exposes port `3000` (HTTP) and `3001` (HTTPS) and persists data in a `xen-data` volume.
+
+To build the image from this repository instead: `docker build -t ghcr.io/xenman-project/xenman:latest .`
 
 ### Appliance
 
@@ -109,7 +111,7 @@ Import it with `xe vm-import filename=xenman-appliance-<tag>.xva` or in XenCente
 
 Updates come in three kinds:
 
-- **XenMan** — by hand: a signed `.xenup` package, built with `appliance/build-update.sh` and uploaded under Settings → Appliance. The appliance checks the signature against the release key it was built with.
+- **XenMan** — by hand: a signed `.xenup` package from the [releases](https://github.com/xenman-project/xenman/releases), uploaded under Settings → Appliance. The appliance checks the signature against the release key it was built with.
 - **Debian security updates** — installed by `unattended-upgrades` in a maintenance window you set.
 - **Debian or Node.js major versions** — a new appliance; the data directory is copied across.
 

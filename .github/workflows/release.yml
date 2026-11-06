@@ -1,0 +1,149 @@
+# Builds a release from a tag: the Docker image, the appliance (.xva) and the
+# signed update package (.xenup), and publishes them as a GitHub release.
+#
+#   git tag -a v1.2.3 -m "XenMan 1.2.3" && git push origin v1.2.3
+#
+# Only the update package needs the private signing key. Its job runs in the
+# "release" environment, which holds the key as a secret, accepts only v* tags
+# and waits for a maintainer's approval before it starts.
+#
+# "Run workflow" by hand is a dry run: everything is built, nothing is pushed
+# or published; the files stay with the run as artifacts for three days.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PUBLISH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  docker:
+    name: Docker image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+            type=sha,enable=${{ github.event_name != 'push' }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: GIT_COMMIT=${{ github.ref_name }}
+
+  xenup:
+    name: Update package (.xenup)
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build and sign
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.RELEASE_KEY }}
+        run: |
+          key="$RUNNER_TEMP/release-key"
+          ( umask 077; printf '%s\n' "$RELEASE_KEY_PEM" > "$key" )
+          trap 'rm -f "$key"' EXIT
+          RELEASE_KEY="$key" ./appliance/build-update.sh
+      - name: Verify against the public key in the repository
+        run: |
+          f=$(ls dist/*.xenup)
+          node appliance/xenup.js verify --file "$f" --key appliance/release-key.pub > /dev/null
+          echo "signature valid: $(basename "$f")"
+          (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xenup
+          path: dist/*.xenup*
+          retention-days: 3
+
+  xva:
+    name: Appliance (.xva)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Make room
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / | tail -1
+      - name: Build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq debootstrap fdisk util-linux e2fsprogs curl tar xz-utils grub2-common grub-pc-bin git
+          sudo git config --system --add safe.directory '*'
+      - name: Build
+        run: sudo RELEASE_KEY_PUB="$PWD/appliance/release-key.pub" TMPDIR=/mnt ./appliance/build-appliance.sh
+      - name: Checksum
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" dist
+          f=$(ls dist/*.xva)
+          (cd dist && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xva
+          path: dist/*.xva*
+          retention-days: 3
+          compression-level: 0
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [docker, xenup, xva]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          xva_sha=$(cut -d' ' -f1 dist/xenman-appliance-"$TAG".xva.sha256)
+          xenup_sha=$(cut -d' ' -f1 dist/xenman-"$TAG".xenup.sha256)
+          sed -e "s/{{TAG}}/$TAG/g" -e "s/{{XVA_SHA256}}/$xva_sha/g" -e "s/{{XENUP_SHA256}}/$xenup_sha/g" \
+            -e "s#{{IMAGE}}#ghcr.io/${GITHUB_REPOSITORY}:$TAG#g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          prerelease=""; case "$TAG" in *-*) prerelease="--prerelease";; esac
+          gh release create "$TAG" --verify-tag --title "XenMan ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes $prerelease \
+            dist/xenman-appliance-"$TAG".xva dist/xenman-appliance-"$TAG".xva.sha256 \
+            dist/xenman-"$TAG".xenup dist/xenman-"$TAG".xenup.sha256
