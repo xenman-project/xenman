@@ -66,6 +66,9 @@ import {
   Camera,
   RotateCw,
   BrainCircuit,
+  Copy,
+  LayoutTemplate,
+  MoreHorizontal,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { VmPowerState } from "@/lib/types";
@@ -73,6 +76,7 @@ import { CheckCircle, XCircle, Settings, MonitorUp } from "lucide-react";
 import { downloadRdpFile, rdpAddress } from "@/lib/rdp-file";
 import { VmSettingsDialog } from "@/components/vm-settings-dialog";
 import { MemoryTab } from "@/components/memory/memory-tab";
+import { ConvertToTemplateDialog, CopyVmDialog, SnapshotTemplateDialog } from "@/components/vm/copy-vm-dialog";
 import { useDates } from "@/context/date-format-context";
 
 function formatBytes(bytes: number): string {
@@ -230,6 +234,10 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
   const [snapshotActionLoading, setSnapshotActionLoading] = React.useState<string | null>(null);
   const [snapshotRevertConfirm, setSnapshotRevertConfirm] = React.useState<SnapshotInfo | null>(null);
   const [snapshotDeleteConfirm, setSnapshotDeleteConfirm] = React.useState<SnapshotInfo | null>(null);
+  // XenCenter's Copy VM, Convert to Template, Create Template From Snapshot.
+  const [copyOpen, setCopyOpen] = React.useState(false);
+  const [convertOpen, setConvertOpen] = React.useState(false);
+  const [snapshotTemplate, setSnapshotTemplate] = React.useState<SnapshotInfo | null>(null);
 
   const [guestOsVersion, setGuestOsVersion] = React.useState<string | null>(null);
   const [guestIpAddresses, setGuestIpAddresses] = React.useState<string[]>([]);
@@ -791,6 +799,27 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
             )}
 
             {canAct && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" title="More" disabled={actionLoading !== null}>
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {/* CopyVMCommand / ConvertVMToTemplateCommand: a VM that is shut down. */}
+                  <DropdownMenuItem disabled={vm.powerState !== "Halted"} onClick={() => setCopyOpen(true)}>
+                    <Copy className="h-4 w-4" />
+                    <span className="ml-2">Copy VM...</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={vm.powerState !== "Halted"} onClick={() => setConvertOpen(true)}>
+                    <LayoutTemplate className="h-4 w-4" />
+                    <span className="ml-2">Convert to Template...</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            {canAct && (
               <Button
                 variant="outline"
                 size="sm"
@@ -1273,6 +1302,16 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                                 <Button
                                   size="icon"
                                   variant="ghost"
+                                  className="h-7 w-7 text-zinc-400 hover:text-blue-600"
+                                  title="Save as Template"
+                                  disabled={snapshotActionLoading !== null}
+                                  onClick={() => setSnapshotTemplate(snap)}
+                                >
+                                  <LayoutTemplate className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
                                   className="h-7 w-7 text-zinc-400 hover:text-amber-600"
                                   title="Revert to snapshot"
                                   disabled={snapshotActionLoading !== null}
@@ -1609,6 +1648,33 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {copyOpen && (
+        <CopyVmDialog conn={conn} hostId={hostId!} vmRef={vmRef!} vmName={vm.nameLabel} onClose={() => setCopyOpen(false)} />
+      )}
+      {convertOpen && (
+        <ConvertToTemplateDialog
+          conn={conn}
+          vmRef={vmRef!}
+          vmName={vm.nameLabel}
+          onClose={() => setConvertOpen(false)}
+          onDone={() => {
+            // A template is no VM of the tree any more.
+            setConvertOpen(false);
+            selectVm(null);
+            refreshHost(hostId!);
+          }}
+        />
+      )}
+      {snapshotTemplate && (
+        <SnapshotTemplateDialog
+          conn={conn}
+          hostId={hostId!}
+          snapshotRef={snapshotTemplate.ref}
+          snapshotName={snapshotTemplate.nameLabel}
+          onClose={() => setSnapshotTemplate(null)}
+        />
+      )}
 
       {/* Delete VM Confirmation */}
       <AlertDialog open={deleteConfirmOpen} onOpenChange={(o) => { setDeleteConfirmOpen(o); if (!o) setDeleteConfirmName(""); }}>

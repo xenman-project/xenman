@@ -10,6 +10,7 @@ import {
   ArrowRightLeft,
   Wrench,
   CheckCircle2,
+  Copy,
   XCircle,
   X,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import { XenTaskInfo } from "@/lib/types";
 
 function TaskIcon({ type }: { type: XenTaskInfo["type"] }) {
   if (type === "vm_migrate") return <ArrowRightLeft className="h-4 w-4 shrink-0 text-blue-500" />;
+  if (type === "vm_copy") return <Copy className="h-4 w-4 shrink-0 text-blue-500" />;
   return <Wrench className="h-4 w-4 shrink-0 text-amber-500" />;
 }
 

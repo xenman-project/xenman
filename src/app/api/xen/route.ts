@@ -129,6 +129,7 @@ import { getMgmtJob, runningMgmtJob, startManagementChange } from "@/lib/network
 import { buildGpuOverview } from "@/lib/xen-gpu";
 import { buildMemoryOverview } from "@/lib/xen-memory";
 import { busyVm, getVmMemoryJob, needsReboot, startVmMemoryChange, valuesProblem } from "@/lib/vm-memory-job";
+import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReason, loadCopyRecords, startCopy, uniqueName } from "@/lib/vm-copy";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -810,6 +811,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
+  "vm_copy_check", "vm_snapshot_to_template_check",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -2924,6 +2926,71 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ success: true });
       }
 
+      case "vm_copy_check":
+      case "vm_copy": {
+        // XenCenter's Copy VM dialog (lib/vm-copy.ts): fast clone or full copy within the pool.
+        if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        const records = await loadCopyRecords(call, vmRef);
+        const blocked = copyBlockedReason(records.vm);
+        const plan = buildCopyPlan(records);
+        if (action === "vm_copy_check") return NextResponse.json({ blocked, plan });
+        if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
+        const name = typeof body.nameLabel === "string" ? body.nameLabel.trim() : "";
+        const description = typeof body.description === "string" ? body.description : "";
+        if (!name || name.length > 255) return NextResponse.json({ error: "Enter a name for the copy" }, { status: 400 });
+        if (description.length > 1024) return NextResponse.json({ error: "The description is too long" }, { status: 400 });
+        const mode = body.mode === "copy" ? "copy" : body.mode === "clone" ? "clone" : null;
+        if (!mode) return NextResponse.json({ error: "Choose fast clone or full copy" }, { status: 400 });
+        if (mode === "clone" && !plan.cloneEnabled) return NextResponse.json({ error: plan.cloneUnavailable }, { status: 409 });
+        let srRef: string | undefined;
+        if (mode === "copy") {
+          const sr = plan.srs.find((s) => s.ref === body.srRef);
+          if (!plan.copyEnabled) return NextResponse.json({ error: "A full copy is not possible for this VM" }, { status: 409 });
+          if (!sr) return NextResponse.json({ error: "Choose a storage repository" }, { status: 400 });
+          if (!sr.enabled) return NextResponse.json({ error: `${sr.name}: ${sr.description}` }, { status: 409 });
+          srRef = sr.ref;
+        }
+        const taskRef = await startCopy({ address: host, port, useSsl, sessionRef }, vmRef, { mode, name, description, srRef });
+        return NextResponse.json({ taskRef });
+      }
+
+      case "vm_convert_to_template": {
+        // XenCenter's Convert to Template: asked first, as it cannot be undone.
+        if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        const vm = await call<Record<string, unknown>>("VM.get_record", [vmRef]);
+        const blocked = convertBlockedReason(vm);
+        if (blocked) return NextResponse.json({ error: blocked }, { status: 409 });
+        if (body.confirm !== true) return NextResponse.json({ error: "Converting to a template cannot be undone", needsConfirm: true }, { status: 409 });
+        await convertToTemplate(call, vmRef);
+        return NextResponse.json({ success: true });
+      }
+
+      case "vm_snapshot_to_template_check":
+      case "vm_snapshot_to_template": {
+        // XenCenter's Create Template From Snapshot: a clone of the snapshot, which is a template.
+        const snapRef = body.snapshotRef;
+        if (!isXenRef(snapRef)) return NextResponse.json({ error: "No snapshot given" }, { status: 400 });
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        const snap = await call<Record<string, unknown>>("VM.get_record", [snapRef]);
+        if (snap.is_a_snapshot !== true) return NextResponse.json({ error: "Only a snapshot can be saved as a template" }, { status: 400 });
+        const snapName = String(snap.name_label ?? "");
+        if (action === "vm_snapshot_to_template_check") {
+          const all = await call<Record<string, Record<string, unknown>>>("VM.get_all_records", []);
+          return NextResponse.json({ name: uniqueName(`Template from snapshot '${snapName}'`, Object.values(all).map((v) => String(v.name_label ?? ""))) });
+        }
+        const name = typeof body.nameLabel === "string" ? body.nameLabel.trim() : "";
+        if (!name || name.length > 255) return NextResponse.json({ error: "Enter a name for the new template" }, { status: 400 });
+        const taskRef = await startCopy({ address: host, port, useSsl, sessionRef }, snapRef, {
+          mode: "clone",
+          name,
+          description: `Template generated by XenMan from snapshot '${snapName}'`,
+          instant: true,
+        });
+        return NextResponse.json({ taskRef });
+      }
+
       case "vm_snapshot_delete": {
         const { snapshotRef: delRef } = body;
         await vmDestroy(host, port, useSsl, sessionRef, delRef as string);
@@ -3228,6 +3295,9 @@ interface XenActionFields {
   nameLabel?: string;
   severity?: string;
   sources?: unknown;
+  // Copying a VM, templates from VMs and snapshots.
+  snapshotRef?: unknown;
+  confirm?: unknown;
   // Workload Balancing; its passwords are deliberately not listed here.
   wlbUrl?: unknown;
   wlbUsername?: unknown;
@@ -3395,6 +3465,13 @@ function auditDetail(f: XenActionFields): string | undefined {
     const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
     parts.push(`GPUs=${n(f.pgpuRefs)}`, `allowed+=${n(f.enable)}`, `allowed-=${n(f.disable)}`);
   }
+  if (f.action === "vm_copy") {
+    parts.push(f.mode === "copy" ? `full copy to ${describeRef("SR", typeof f.srRef === "string" ? f.srRef : undefined) ?? String(f.srRef)}` : "fast clone");
+  }
+  if (f.action === "vm_snapshot_to_template" && typeof f.snapshotRef === "string") {
+    parts.push(`snapshot=${describeRef("VM", f.snapshotRef) ?? f.snapshotRef}`);
+  }
+  if (f.action === "vm_convert_to_template" && f.confirm === true) parts.push("confirmed");
   if (f.action === "host_control_domain_memory") {
     parts.push(`memory=${String(f.memory)}`);
     if (f.confirmReboot === true) parts.push("reboot confirmed");

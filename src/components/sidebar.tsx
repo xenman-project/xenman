@@ -48,10 +48,13 @@ import {
   Unlink,
   ServerCog,
   KeyRound,
+  Copy,
+  LayoutTemplate,
 } from "lucide-react";
 import { LicenseManagerDialog } from "@/components/license-manager";
 import { AddServerDialog } from "@/components/pool/add-server-dialog";
 import { RemoveServerDialog } from "@/components/pool/remove-server-dialog";
+import { ConvertToTemplateDialog, CopyVmDialog } from "@/components/vm/copy-vm-dialog";
 import { useAuth, type UserRole } from "@/context/auth-context";
 
 /**
@@ -271,6 +274,10 @@ function VmButton({
   const [migrateOpen, setMigrateOpen] = useState(false);
   const [targetHost, setTargetHost] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [convertOpen, setConvertOpen] = useState(false);
+  const { state: xenState, selectVm: selectVmCtx } = useXen();
+  const fullConn = xenState.connections[hostId];
 
   const canMigrate = vm.powerState === "Running" && hostRecords.length > 1;
   const migrationTargets = hostRecords.filter((h) => h.ref !== vm.residentOn && h.enabled);
@@ -449,6 +456,16 @@ function VmButton({
                 </ContextMenuSub>
               )}
               <ContextMenuSeparator />
+              {/* XenCenter's Copy VM... and Convert to Template...: a VM that is shut down. */}
+              <ContextMenuItem disabled={vm.powerState !== "Halted" || !fullConn} onClick={() => setCopyOpen(true)}>
+                <Copy className="h-4 w-4" />
+                Copy VM...
+              </ContextMenuItem>
+              <ContextMenuItem disabled={vm.powerState !== "Halted" || !fullConn} onClick={() => setConvertOpen(true)}>
+                <LayoutTemplate className="h-4 w-4" />
+                Convert to Template...
+              </ContextMenuItem>
+              <ContextMenuSeparator />
               <ContextMenuItem onClick={() => setSettingsOpen(true)}>
                 <Settings className="h-4 w-4" />
                 Settings
@@ -457,6 +474,23 @@ function VmButton({
           )}
         </ContextMenuContent>
       </ContextMenu>
+
+      {copyOpen && fullConn && (
+        <CopyVmDialog conn={fullConn} hostId={hostId} vmRef={vm.ref} vmName={vm.nameLabel} onClose={() => setCopyOpen(false)} />
+      )}
+      {convertOpen && fullConn && (
+        <ConvertToTemplateDialog
+          conn={fullConn}
+          vmRef={vm.ref}
+          vmName={vm.nameLabel}
+          onClose={() => setConvertOpen(false)}
+          onDone={() => {
+            setConvertOpen(false);
+            if (selectedVmRef === vm.ref) selectVmCtx(null);
+            refreshHost(hostId);
+          }}
+        />
+      )}
 
       <VmSettingsDialog
         open={settingsOpen}

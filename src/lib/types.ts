@@ -292,7 +292,7 @@ export interface XenTaskInfo {
   id: string;
   taskRef: string;
   hostId: string;
-  type: "vm_migrate" | "host_evacuate" | "vm_create";
+  type: "vm_migrate" | "host_evacuate" | "vm_create" | "vm_copy";
   label: string;
   description: string;
   status: "pending" | "success" | "failure" | "cancelled";
