@@ -3,6 +3,10 @@
 #
 #   git tag -a v1.2.3 -m "XenMan 1.2.3" && git push origin v1.2.3
 #
+# The release's text is the version's section of CHANGELOG.md (a release
+# candidate, v1.2.3-rc.1, takes 1.2.3's): write it first -- without it the
+# release is not published (.github/release-notes.sh).
+#
 # Only the update package needs the private signing key. Its job runs in the
 # "release" environment, which holds the key as a secret, accepts only v* tags
 # and waits for a maintainer's approval before it starts.
@@ -147,13 +151,8 @@ jobs:
           (cd dist && sha256sum -c "xenman-appliance-$name.xva.sha256" "xenman-$name.xenup.sha256")
           xva_sha=$(cut -d' ' -f1 "dist/xenman-appliance-$name.xva.sha256")
           xenup_sha=$(cut -d' ' -f1 "dist/xenman-$name.xenup.sha256")
-          sed -e "s/{{TAG}}/$name/g" -e "s/{{XVA_SHA256}}/$xva_sha/g" -e "s/{{XENUP_SHA256}}/$xenup_sha/g" \
-            -e "s#{{IMAGE}}#ghcr.io/${GITHUB_REPOSITORY}:$name#g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
-          # A release candidate says what it is instead of the beta note.
-          case "$name" in *-*)
-            version=${name#v}; version=${version%%-*}
-            sed -i "s/^> \*\*Beta\.\*\*.*/> **Release candidate.** For testing before XenMan ${version} is released -- try it on a test pool, not in production, and please report problems as issues./" "$RUNNER_TEMP/notes.md";;
-          esac
+          # The version's section of CHANGELOG.md, then the files: no section, no release.
+          bash .github/release-notes.sh "$name" "$xva_sha" "$xenup_sha" "$GITHUB_REPOSITORY" "${TITLE_SUFFIX:+beta}" > "$RUNNER_TEMP/notes.md"
           echo "NAME=$name" >> "$GITHUB_ENV"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Create the release
