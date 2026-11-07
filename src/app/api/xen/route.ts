@@ -131,6 +131,7 @@ import { buildMemoryOverview } from "@/lib/xen-memory";
 import { busyVm, getVmMemoryJob, needsReboot, startVmMemoryChange, valuesProblem } from "@/lib/vm-memory-job";
 import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReason, loadCopyRecords, startCopy, uniqueName } from "@/lib/vm-copy";
 import { finishImport, ImportRefused, importTargets, loadImportRecords } from "@/lib/vm-import";
+import { applyVmGpus, buildVmGpuPage, changeProblem, loadVmGpuRecords } from "@/lib/vm-gpu";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -812,7 +813,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
-  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets",
+  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -2978,6 +2979,30 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ taskRef });
       }
 
+      case "vm_gpu":
+      case "vm_gpu_set": {
+        // XenCenter's VM Properties → GPU (lib/vm-gpu.ts).
+        if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        const records = await loadVmGpuRecords(call, vmRef);
+        if (records.vm.is_a_template === true || records.vm.is_a_snapshot === true || records.vm.is_control_domain === true) {
+          return NextResponse.json({ error: "Only a VM can have virtual GPUs" }, { status: 400 });
+        }
+        const page = buildVmGpuPage(records, vmRef);
+        if (action === "vm_gpu") return NextResponse.json(page);
+        const keep = Array.isArray(body.keep) && body.keep.every(isXenRef) ? (body.keep as string[]) : null;
+        const add = Array.isArray(body.add)
+          ? (body.add as Record<string, unknown>[]).filter((a) => isXenRef(a?.group) && isXenRef(a?.type)).map((a) => ({ group: a.group as string, type: a.type as string }))
+          : null;
+        if (!keep || !add || add.length !== (body.add as unknown[]).length || add.length > 8) {
+          return NextResponse.json({ error: "Unknown virtual GPUs" }, { status: 400 });
+        }
+        const problem = changeProblem(page, { keep, add });
+        if (problem) return NextResponse.json({ error: problem }, { status: 409 });
+        await applyVmGpus(call, vmRef, page, { keep, add });
+        return NextResponse.json({ success: true });
+      }
+
       case "vm_import_targets": {
         // XenCenter's Import wizard for an XVA: home servers and the SRs a VM may go to (lib/vm-import.ts).
         const affinity = isXenRef(body.affinity) ? body.affinity : null;
@@ -3351,6 +3376,9 @@ interface XenActionFields {
   // Import.
   networks?: unknown;
   start?: unknown;
+  // A VM's vGPUs.
+  keep?: unknown;
+  add?: unknown;
   // Workload Balancing; its passwords are deliberately not listed here.
   wlbUrl?: unknown;
   wlbUsername?: unknown;
@@ -3525,6 +3553,13 @@ function auditDetail(f: XenActionFields): string | undefined {
     parts.push(`snapshot=${describeRef("VM", f.snapshotRef) ?? f.snapshotRef}`);
   }
   if (f.action === "vm_convert_to_template" && f.confirm === true) parts.push("confirmed");
+  if (f.action === "vm_gpu_set") {
+    const kept = Array.isArray(f.keep) ? f.keep.length : 0;
+    const added = Array.isArray(f.add)
+      ? (f.add as Record<string, unknown>[]).map((a) => describeRef("VGPU_type", typeof a?.type === "string" ? a.type : undefined) ?? String(a?.type))
+      : [];
+    parts.push(`kept=${kept}`, added.length ? `added: ${added.join(", ")}` : "added none");
+  }
   if (f.action === "vm_import_finish") {
     const n = f.networks && typeof f.networks === "object" ? Object.keys(f.networks as object).length : 0;
     parts.push(`interfaces=${n}`, f.start === true ? "start" : "no start");

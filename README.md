@@ -12,13 +12,13 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings
 - **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
 - **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs and disks; networks, bonds, VLANs and the management interface
-- **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types
+- **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types, vGPUs assigned to VMs
 - **Updates & licensing** — host updates with mail notification, License Manager, Workload Balancing
 - **Monitoring** — performance graphs, alerts, events and an audit log
 - **Users** — Admin / Operator / Viewer roles, invitations and password reset by mail, inactivity sign-out
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
-XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, OVF import, cross-pool and storage migration, vGPU assignment to VMs, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
+XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, OVF import, cross-pool and storage migration, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
 
 ## Screenshots
 

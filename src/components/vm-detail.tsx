@@ -77,6 +77,7 @@ import { downloadRdpFile, rdpAddress } from "@/lib/rdp-file";
 import { VmSettingsDialog } from "@/components/vm-settings-dialog";
 import { MemoryTab } from "@/components/memory/memory-tab";
 import { ConvertToTemplateDialog, CopyVmDialog, SnapshotTemplateDialog } from "@/components/vm/copy-vm-dialog";
+import { VmGpuTab } from "@/components/vm/vm-gpu-tab";
 import { useDates } from "@/context/date-format-context";
 
 function formatBytes(bytes: number): string {
@@ -845,6 +846,7 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
             <TabsTrigger value="memory">Memory</TabsTrigger>
             <TabsTrigger value="storage">Storage</TabsTrigger>
             <TabsTrigger value="network">Network</TabsTrigger>
+            <TabsTrigger value="gpu">GPU</TabsTrigger>
             <TabsTrigger value="snapshots">Snapshots</TabsTrigger>
             <TabsTrigger value="performance">Performance</TabsTrigger>
           </TabsList>
@@ -1232,6 +1234,10 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="gpu" className="mt-4">
+            <VmGpuTab key={`${hostId}:${vmRef}:${vm.powerState}`} conn={conn} vmRef={vmRef!} canEdit={canAct} onSaved={() => refreshHost(hostId!)} />
           </TabsContent>
 
           <TabsContent value="snapshots" className="mt-4">

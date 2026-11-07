@@ -10,6 +10,7 @@ section of the version it leads to.
 - **Copy VM**: fast clone or full copy onto another storage repository of the pool, with XenCenter's checks for which SRs can take the copy.
 - **Convert to Template**, and **Save as Template** for snapshots.
 - **Import** of a VM from an XVA file, uploaded from the browser: home server, storage and network mapping as in XenCenter's import wizard; optionally started afterwards.
+- **Virtual GPUs of a VM**: a GPU tab per VM to add and remove vGPUs or pass a whole GPU through, with XenCenter's rules for which types may share a VM and its notes on drivers, Remote Desktop and HA.
 
 ### Changed
 - Menu entries and buttons no longer end in "...".
