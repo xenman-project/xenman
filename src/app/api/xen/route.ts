@@ -132,6 +132,7 @@ import { busyVm, getVmMemoryJob, needsReboot, startVmMemoryChange, valuesProblem
 import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReason, loadCopyRecords, startCopy, uniqueName } from "@/lib/vm-copy";
 import { finishImport, ImportRefused, importTargets, loadImportRecords } from "@/lib/vm-import";
 import { applyVmGpus, buildVmGpuPage, changeProblem, loadVmGpuRecords } from "@/lib/vm-gpu";
+import { buildSrStates, loadSrRecords, runSrCommand, SrRefused, type SrCommand } from "@/lib/sr-manage";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -813,7 +814,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
-  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu",
+  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -834,6 +835,8 @@ const MAX_POLLED_POOLS = 32;
 
 const ADMIN_ONLY_ACTIONS = new Set([
   "pool_join", "pool_set_name_label", "sr_create",
+  // XenCenter's SR menu: repair, detach, forget, destroy, set as default, reclaim space.
+  "sr_command",
   "pool_wlb_connect", "pool_wlb_disconnect", "pool_wlb_set_enabled", "pool_wlb_configure", "pool_wlb_apply",
   // A pool's networks: what XenCenter's Networking tab changes.
   "network_create", "network_update", "network_destroy", "network_configure_ip", "network_management_change",
@@ -2979,6 +2982,40 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ taskRef });
       }
 
+      case "sr_states": {
+        // XenCenter's SR menu: which commands each SR allows, and why not (lib/sr-manage.ts).
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        return NextResponse.json({ srs: buildSrStates(await loadSrRecords(call)) });
+      }
+
+      case "sr_command": {
+        const srRef = body.srRef;
+        const command = body.command as SrCommand;
+        if (!isXenRef(srRef)) return NextResponse.json({ error: "No SR given" }, { status: 400 });
+        if (!["repair", "detach", "forget", "destroy", "setDefault", "trim"].includes(command)) {
+          return NextResponse.json({ error: "Unknown command" }, { status: 400 });
+        }
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        // XenCenter asks before these; Destroy loses every disk, so the SR's name is typed as well.
+        if (["detach", "forget", "destroy", "trim"].includes(command) && body.confirm !== true) {
+          return NextResponse.json({ error: "Not confirmed", needsConfirm: true }, { status: 409 });
+        }
+        if (command === "destroy") {
+          const name = String((await call<Record<string, unknown>>("SR.get_record", [srRef])).name_label ?? "");
+          if (typeof body.confirmName !== "string" || body.confirmName.trim().toLowerCase() !== name.toLowerCase()) {
+            return NextResponse.json({ error: `Type the SR's name, ${name}, to destroy it` }, { status: 409 });
+          }
+        }
+        try {
+          const failures = await runSrCommand(call, srRef, command);
+          if (failures.length) return NextResponse.json({ error: failures.join("; "), failures }, { status: 502 });
+          return NextResponse.json({ success: true });
+        } catch (err) {
+          if (err instanceof SrRefused) return NextResponse.json({ error: err.message }, { status: 409 });
+          throw err;
+        }
+      }
+
       case "vm_gpu":
       case "vm_gpu_set": {
         // XenCenter's VM Properties → GPU (lib/vm-gpu.ts).
@@ -3379,6 +3416,8 @@ interface XenActionFields {
   // A VM's vGPUs.
   keep?: unknown;
   add?: unknown;
+  // SR commands.
+  command?: unknown;
   // Workload Balancing; its passwords are deliberately not listed here.
   wlbUrl?: unknown;
   wlbUsername?: unknown;
@@ -3553,6 +3592,10 @@ function auditDetail(f: XenActionFields): string | undefined {
     parts.push(`snapshot=${describeRef("VM", f.snapshotRef) ?? f.snapshotRef}`);
   }
   if (f.action === "vm_convert_to_template" && f.confirm === true) parts.push("confirmed");
+  if (f.action === "sr_command") {
+    parts.push(`command=${String(f.command)}`, `sr=${describeRef("SR", typeof f.srRef === "string" ? f.srRef : undefined) ?? String(f.srRef)}`);
+    if (f.confirm === true) parts.push("confirmed");
+  }
   if (f.action === "vm_gpu_set") {
     const kept = Array.isArray(f.keep) ? f.keep.length : 0;
     const added = Array.isArray(f.add)

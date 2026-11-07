@@ -76,6 +76,7 @@ import type { HostConnection } from "@/lib/types";
 import { VmPowerState, XenHostRecord } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
 import { ImportVmDialog } from "@/components/vm/import-vm-dialog";
+import { SrActionsMenu, useSrStates } from "@/components/storage/sr-actions";
 
 const VM_COLORS = [
   "bg-blue-500",
@@ -1281,6 +1282,8 @@ export function StorageTab({
   const [isoInfoSr, setIsoInfoSr] = useState<{ ref: string; name: string } | null>(null);
   const [isoList, setIsoList] = useState<{ ref: string; nameLabel: string }[]>([]);
   const [isoListLoading, setIsoListLoading] = useState(false);
+  // XenCenter's SR menu: what each SR allows, reloaded whenever the pool's SRs change.
+  const { states: srStates, reload: reloadSrStates } = useSrStates(conn, conn.srs);
 
   const xenHosts = Object.values(conn.hostRecords).sort((a, b) => a.nameLabel.localeCompare(b.nameLabel));
   const hostPbds = hostRef ? new Set(conn.hostRecords[hostRef]?.pbds ?? []) : null;
@@ -1342,7 +1345,18 @@ export function StorageTab({
                         return (
                           <TableRow key={sr.ref}>
                             <TableCell className="font-medium">
-                              {sr.nameLabel}
+                              <span className="inline-flex flex-wrap items-center gap-1.5">
+                                {sr.nameLabel}
+                                {srStates[sr.ref]?.isDefault && (
+                                  <Badge variant="outline" className="text-[10px]">Default</Badge>
+                                )}
+                                {srStates[sr.ref] && "repair" in srStates[sr.ref].commands && (
+                                  <Badge variant="outline" className="border-red-500/30 bg-red-500/10 text-[10px] text-red-600">Broken</Badge>
+                                )}
+                                {srStates[sr.ref]?.commands.detach === "The SR is currently detached." && (
+                                  <Badge variant="outline" className="text-[10px] text-zinc-500">Detached</Badge>
+                                )}
+                              </span>
                               {sr.nameDescription && (
                                 <p className="text-[11px] text-zinc-400 truncate max-w-xs">
                                   {sr.nameDescription}
@@ -1378,6 +1392,7 @@ export function StorageTab({
                               {formatBytes(sr.physicalSize)}
                             </TableCell>
                             <TableCell>
+                              <div className="flex items-center justify-end gap-0.5">
                               {sr.type === "iso" && (
                                 <div className="flex items-center gap-0.5">
                                   <Button
@@ -1417,6 +1432,17 @@ export function StorageTab({
                                   </Button>
                                 </div>
                               )}
+                              {isAdmin && srStates[sr.ref] && (
+                                <SrActionsMenu
+                                  conn={conn}
+                                  state={srStates[sr.ref]}
+                                  onDone={() => {
+                                    void reloadSrStates();
+                                    void refreshHost(hostId);
+                                  }}
+                                />
+                              )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         );

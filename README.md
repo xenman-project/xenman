@@ -11,7 +11,7 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Pools & hosts** — several pools at once, maintenance mode, add and remove servers, control domain memory, certificate pinning
 - **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings
 - **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
-- **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs and disks; networks, bonds, VLANs and the management interface
+- **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs (create, repair, detach, forget, destroy) and disks; networks, bonds, VLANs and the management interface
 - **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types, vGPUs assigned to VMs
 - **Updates & licensing** — host updates with mail notification, License Manager, Workload Balancing
 - **Monitoring** — performance graphs, alerts, events and an audit log

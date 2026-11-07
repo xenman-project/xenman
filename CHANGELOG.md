@@ -11,6 +11,7 @@ section of the version it leads to.
 - **Convert to Template**, and **Save as Template** for snapshots.
 - **Import** of a VM from an XVA file, uploaded from the browser: home server, storage and network mapping as in XenCenter's import wizard; optionally started afterwards.
 - **Virtual GPUs of a VM**: a GPU tab per VM to add and remove vGPUs or pass a whole GPU through, with XenCenter's rules for which types may share a VM and its notes on drivers, Remote Desktop and HA.
+- **Storage repository commands** in the Storage tab: Repair, Detach, Forget, Destroy, Set as Default and Reclaim freed space, with XenCenter's checks and questions; Destroy also asks for the SR's name. Broken, detached and default SRs are marked.
 
 ### Changed
 - Menu entries and buttons no longer end in "...".
