@@ -20,6 +20,10 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 
 XenMan covers everyday pool and VM administration. Not yet included, among others: HA configuration, OVF import, cross-pool and storage migration, vApps, snapshot schedules, disaster recovery, Active Directory, Server Status Report and Rolling Pool Upgrade — keep XenCenter at hand for those.
 
+## Is it production-ready?
+Yes, the core functionality of XenMan has been actively running and tested in a real production environment for over 8 months now. While we continuously push new features, the foundation is stable.
+However, please note that XenMan focuses on everyday pool and VM administration. Specialized enterprise tasks like HA configuration, OVF imports, cross-pool storage migration, vApps, snapshot schedules, disaster recovery, Active Directory integration, Server Status Reports, or Rolling Pool Upgrades are not yet included. For these specific edge cases, you should keep the standard XenCenter client at hand.
+
 ## Screenshots
 
 <table>
