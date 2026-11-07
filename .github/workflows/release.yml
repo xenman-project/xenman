@@ -26,7 +26,8 @@ concurrency:
 
 env:
   PUBLISH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
-  # Appended to every release title while XenMan is in beta; empty it to drop.
+  # Appended to the title of every release while XenMan is in beta -- not to
+  # a release candidate (a tag with "-", e.g. v1.2.3-rc.1); empty it to drop.
   TITLE_SUFFIX: " (Beta)"
 
 jobs:
@@ -148,6 +149,11 @@ jobs:
           xenup_sha=$(cut -d' ' -f1 "dist/xenman-$name.xenup.sha256")
           sed -e "s/{{TAG}}/$name/g" -e "s/{{XVA_SHA256}}/$xva_sha/g" -e "s/{{XENUP_SHA256}}/$xenup_sha/g" \
             -e "s#{{IMAGE}}#ghcr.io/${GITHUB_REPOSITORY}:$name#g" .github/release-notes.md > "$RUNNER_TEMP/notes.md"
+          # A release candidate says what it is instead of the beta note.
+          case "$name" in *-*)
+            version=${name#v}; version=${version%%-*}
+            sed -i "s/^> \*\*Beta\.\*\*.*/> **Release candidate.** For testing before XenMan ${version} is released -- try it on a test pool, not in production, and please report problems as issues./" "$RUNNER_TEMP/notes.md";;
+          esac
           echo "NAME=$name" >> "$GITHUB_ENV"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Create the release
@@ -157,7 +163,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           [ "$NAME" = "$TAG" ] || { echo "files are named $NAME, the tag is $TAG"; exit 1; }
-          prerelease=""; case "$TAG" in *-*) prerelease="--prerelease";; esac
-          gh release create "$TAG" --verify-tag --title "XenMan ${TAG#v}${TITLE_SUFFIX}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes $prerelease \
+          prerelease=""; suffix="$TITLE_SUFFIX"
+          case "$TAG" in *-*) prerelease="--prerelease"; suffix="";; esac
+          gh release create "$TAG" --verify-tag --title "XenMan ${TAG#v}${suffix}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes $prerelease \
             dist/xenman-appliance-"$TAG".xva dist/xenman-appliance-"$TAG".xva.sha256 \
             dist/xenman-"$TAG".xenup dist/xenman-"$TAG".xenup.sha256
