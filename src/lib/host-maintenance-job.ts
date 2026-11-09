@@ -5,10 +5,12 @@
  * 1. What would stop it, asked first (WlbEvacuateRecommendationsAction): with
  *    WLB, its evacuation recommendations; else -- or when WLB has none --
  *    host.get_vms_which_prevent_evacuation. A VM named there stops it before
- *    anything changed.
+ *    anything changed -- except, with WLB, for a lack of free memory.
  * 2. host.disable, then other_config MAINTENANCE_MODE=true.
  * 3. With WLB's recommendations: each VM migrated live to the host WLB names,
- *    three tries ten seconds apart. Otherwise host.evacuate -- and, as
+ *    three tries ten seconds apart; the VMs WLB has no host for
+ *    (HOST_NOT_ENOUGH_FREE_MEMORY, where XenCenter stops) then one by one as
+ *    below. Otherwise host.evacuate -- and, as
  *    XenMan's update jobs do, when XenServer's evacuation finds no plan for
  *    all VMs at once (HOST_NOT_ENOUGH_FREE_MEMORY naming one of them, seen
  *    with memory free on the other hosts), the VMs moved one by one to the
@@ -149,8 +151,15 @@ async function run(job: MaintenanceJob, ctx: MaintenanceContext, call: XapiCall)
       if (!to || !live(to)) useWlb = false;
     }
     if (useWlb) {
-      // NoRecommendationError: an entry that is not a move is WLB's reason why not.
-      const wrong = vmRecs.find(([, v]) => str(v[0]).trim().toLowerCase() !== "wlb");
+      // NoRecommendationError: an entry that is not a move is the reason why
+      // not. XenCenter stops on any; XenMan stops on all but
+      // HOST_NOT_ENOUGH_FREE_MEMORY, which xapi puts on each VM WLB left out
+      // of its plan -- seen in the field for vGPU VMs that migrate live
+      // without trouble. Those are moved one by one after WLB's moves.
+      const wrong = vmRecs.find(([, v]) => {
+        const code = str(v[0]).trim();
+        return code.toLowerCase() !== "wlb" && code !== "HOST_NOT_ENOUGH_FREE_MEMORY";
+      });
       if (wrong) {
         throw new Refused(`${await vmName(wrong[0])}: ${wrong[1].filter(Boolean).join(" ")}`);
       }
@@ -216,6 +225,9 @@ async function moveByWlb(
     if (isDom0) continue;
     moves.push({ vm, to });
   }
+  // VMs WLB has no host for (HOST_NOT_ENOUGH_FREE_MEMORY), moved afterwards.
+  const unplaced = Object.values(recs).filter((v) => str(v[0]).trim() === "HOST_NOT_ENOUGH_FREE_MEMORY").length;
+  const total = moves.length + unplaced;
   let done = 0;
   for (const { vm, to } of moves) {
     const name = await call<string>("VM.get_name_label", [vm]).catch(() => vm);
@@ -233,9 +245,11 @@ async function moveByWlb(
     }
     if (last) throw last;
     done++;
-    job.progress = 0.2 + (0.8 * done) / Math.max(moves.length, 1);
+    job.progress = 0.2 + (0.8 * done) / Math.max(total, 1);
   }
-  return `${done} VM${done === 1 ? "" : "s"} migrated as WLB recommended`;
+  const byWlb = `${done} VM${done === 1 ? "" : "s"} migrated as WLB recommended`;
+  const rest = await moveOneByOne(job, call, "WLB had no host for it", done, total);
+  return rest ? `${byWlb}, ${rest} one by one (WLB had no host for ${rest === 1 ? "it" : "them"})` : byWlb;
 }
 
 /** host.evacuate; when it finds no plan for all VMs at once, one by one. */
@@ -248,8 +262,17 @@ async function evacuate(job: MaintenanceJob, call: XapiCall): Promise<string> {
   } catch (err) {
     if (!(err instanceof Error) || err.message !== "HOST_NOT_ENOUGH_FREE_MEMORY") throw err;
   }
-  // As the update jobs' moveOneByOne: the biggest first, live, to the host
-  // XenServer accepts the VM on with the most memory free.
+  const done = await moveOneByOne(job, call, "XenServer found no plan for all VMs at once");
+  return `${done} VM${done === 1 ? "" : "s"} migrated one by one (XenServer found no plan for all at once)`;
+}
+
+/**
+ * The VMs still running on the host, as the update jobs' moveOneByOne: the
+ * biggest first, live, to the host XenServer accepts the VM on with the most
+ * memory free. Returns how many were moved.
+ */
+async function moveOneByOne(job: MaintenanceJob, call: XapiCall, reason: string, doneBefore = 0, totalBefore = 0): Promise<number> {
+  const h = job.hostRef;
   const vms: { vm: string; name: string; mem: number }[] = [];
   for (const vm of await call<string[]>("host.get_resident_VMs", [h])) {
     const r = await call<Rec>("VM.get_record", [vm]).catch(() => null);
@@ -257,6 +280,8 @@ async function evacuate(job: MaintenanceJob, call: XapiCall): Promise<string> {
     vms.push({ vm, name: str(r.name_label), mem: Number(r.memory_dynamic_max ?? r.memory_static_max ?? 0) });
   }
   vms.sort((a, b) => b.mem - a.mem);
+  if (!vms.length) return 0;
+  const total = Math.max(totalBefore, doneBefore + vms.length);
   const others = (await call<string[]>("host.get_all", [])).filter((x) => x !== h);
   let done = 0;
   for (const { vm, name } of vms) {
@@ -279,10 +304,10 @@ async function evacuate(job: MaintenanceJob, call: XapiCall): Promise<string> {
     }
     if (!best) throw new Refused(`No host takes ${name}${why ? ` (${why})` : ""}`);
     const target = await call<string>("host.get_name_label", [best]).catch(() => best);
-    job.step = `Migrating ${name} to ${target} (one by one: XenServer found no plan for all VMs at once)`;
+    job.step = `Migrating ${name} to ${target} (one by one: ${reason})`;
     await asyncCall(call, "VM.pool_migrate", [vm, best, { live: "true" }], MIGRATE_MS);
     done++;
-    job.progress = 0.2 + (0.8 * done) / vms.length;
+    job.progress = 0.2 + (0.8 * (doneBefore + done)) / total;
   }
-  return `${done} VM${done === 1 ? "" : "s"} migrated one by one (XenServer found no plan for all at once)`;
+  return done;
 }
