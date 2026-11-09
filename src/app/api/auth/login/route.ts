@@ -4,8 +4,8 @@ import {
   verifyCredentials,
   signToken,
   mustChangePassword,
-  COOKIE_NAME,
 } from "@/lib/auth";
+import { setAuthCookie, viaHttps } from "@/lib/auth-cookie";
 import { auditRequest, clientIp } from "@/lib/audit";
 import { loginBlocked, loginFailed, loginSucceeded, waitText } from "@/lib/login-guard";
 
@@ -74,9 +74,7 @@ export async function POST(request: NextRequest) {
     const changeFirst = mustChangePassword(user, password);
     const token = signToken(user.username, user.role, changeFirst);
 
-    const isHttps =
-      request.headers.get("x-forwarded-proto") === "https" ||
-      request.nextUrl.protocol === "https:";
+    const isHttps = viaHttps(request);
 
     const response = NextResponse.json({
       success: true,
@@ -84,13 +82,7 @@ export async function POST(request: NextRequest) {
       role: user.role,
       mustChangePassword: changeFirst,
     });
-    response.cookies.set(COOKIE_NAME, token, {
-      httpOnly: true,
-      secure: isHttps,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24, // 24 hours
-    });
+    setAuthCookie(request, response, token);
 
     auditRequest(request, {
       actor: user.username,

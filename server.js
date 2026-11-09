@@ -125,6 +125,18 @@ function getTokenFromCookies(cookieHeader) {
 // --- Self-signed TLS certificate ---
 const TLS_PFX_PASSPHRASE = "xenman";
 
+// The private key is readable by XenMan alone: openssl writes it with the
+// umask, and a PFX holds its key behind a passphrase everyone can read here.
+// (Not on Windows, where the data directory's ACL decides.)
+function keyFileOnlyForUs(file) {
+  if (process.platform === "win32") return;
+  try {
+    if ((fs.statSync(file).mode & 0o077) !== 0) fs.chmodSync(file, 0o600);
+  } catch {
+    // Missing, or not ours to change: HTTPS still starts.
+  }
+}
+
 function generateCertOpenssl(certFile, keyFile) {
   execSync(
     `openssl req -x509 -newkey rsa:2048 -keyout "${keyFile}" -out "${certFile}" -days 3650 -nodes -subj "/CN=XenMan"`,
@@ -167,6 +179,8 @@ function ensureTlsCert() {
   const keyFile = path.join(DATA_DIR, "key.pem");
   const pfxFile = path.join(DATA_DIR, "cert.pfx");
 
+  keyFileOnlyForUs(keyFile);
+  keyFileOnlyForUs(pfxFile);
   // Check for existing PEM files
   if (fs.existsSync(certFile) && fs.existsSync(keyFile)) {
     return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
@@ -180,6 +194,7 @@ function ensureTlsCert() {
   if (process.platform !== "win32") {
     try {
       generateCertOpenssl(certFile, keyFile);
+      keyFileOnlyForUs(keyFile);
       console.log("> Self-signed TLS certificate generated (PEM)");
       return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
     } catch {
@@ -240,10 +255,16 @@ function watchTlsFiles(httpsServer) {
 }
 
 // --- WebSocket upgrade handler ---
-function createUpgradeHandler(wss) {
+// transportOk: whether the connection came in a way a console may use (see overHttp).
+function createUpgradeHandler(wss, transportOk) {
   return (req, socket, head) => {
     const { pathname } = parse(req.url);
     if (pathname === "/api/vnc-proxy") {
+      if (!transportOk(req)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       const token = getTokenFromCookies(req.headers.cookie);
       const payload = token ? verifyJwtSync(token, process.env.JWT_SECRET) : null;
       // pwc: still on the default password, which has to be changed first.
@@ -286,42 +307,113 @@ function withClientAddress(handler) {
   };
 }
 
+// --- HTTPS only ---
+// Plain HTTP carries the password and the session cookie in the clear, so with
+// HTTPS running, a request over HTTP is sent to the same address over HTTPS.
+// Left alone: requests from this machine (the appliance updater's health check,
+// tests), and requests a trusted proxy (XENMAN_TRUST_PROXY=1) says it received
+// over HTTPS. The app learns how a request came in from x-xenman-transport,
+// which only this file sets: "https", "http-local" or "http" (HTTPS off).
+const TRANSPORT_HEADER = "x-xenman-transport";
+// The HTTPS port browsers reach, when a port mapping makes it differ from HTTPS_PORT.
+const PUBLIC_HTTPS_PORT = parseInt(process.env.XENMAN_PUBLIC_HTTPS_PORT || "0", 10);
+const HSTS = "max-age=31536000";
+
+function isLoopback(req) {
+  const a = String(req.socket.remoteAddress || "");
+  return a === "::1" || a === "127.0.0.1" || a === "::ffff:127.0.0.1";
+}
+
+function forwardedHttps(req) {
+  if (!TRUST_PROXY) return false;
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  return proto === "https";
+}
+
+/** Where a plain HTTP request is sent instead; null when it cannot be said. */
+function httpsLocation(req, httpsPort) {
+  const host = String(req.headers.host || "");
+  const m = host.match(/^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::\d+)?$/);
+  if (!m) return null;
+  const port = PUBLIC_HTTPS_PORT || httpsPort;
+  const url = String(req.url || "/");
+  return `https://${m[1]}${port === 443 ? "" : `:${port}`}${url.startsWith("/") ? url : "/"}`;
+}
+
+function overHttps(handler) {
+  return function (req, res) {
+    req.headers[TRANSPORT_HEADER] = "https";
+    res.setHeader("Strict-Transport-Security", HSTS);
+    return handler.call(this, req, res);
+  };
+}
+
+function overHttp(handler, httpsPort) {
+  return function (req, res) {
+    if (forwardedHttps(req)) {
+      req.headers[TRANSPORT_HEADER] = "https";
+      res.setHeader("Strict-Transport-Security", HSTS);
+    } else if (isLoopback(req)) {
+      req.headers[TRANSPORT_HEADER] = "http-local";
+    } else if (httpsPort > 0) {
+      const location = httpsLocation(req, httpsPort);
+      res.statusCode = location ? 308 : 400;
+      if (location) res.setHeader("Location", location);
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(location ? `XenMan is served over HTTPS: ${location}\n` : "Bad Request\n");
+      return;
+    } else {
+      req.headers[TRANSPORT_HEADER] = "http";
+    }
+    return handler.call(this, req, res);
+  };
+}
+
 // --- Monkey-patch http.createServer ---
 const originalCreateServer = http.createServer.bind(http);
 
 let patched = false;
 
 http.createServer = function (...args) {
-  if (typeof args[args.length - 1] === "function") args[args.length - 1] = withClientAddress(args[args.length - 1]);
-  const server = originalCreateServer(...args);
+  const last = args.length - 1;
+  const handler = typeof args[last] === "function" ? withClientAddress(args[last]) : null;
+  // Only this file says how a request came in.
+  const clean = handler && function (req, res) {
+    delete req.headers[TRANSPORT_HEADER];
+    return handler.call(this, req, res);
+  };
+  if (patched || !clean) {
+    if (clean) args[last] = clean;
+    return originalCreateServer(...args);
+  }
+  patched = true;
 
-  if (!patched) {
-    patched = true;
-
-    // Attach WebSocket upgrade handler to HTTP server
-    const wss = newWss();
-    server.on("upgrade", createUpgradeHandler(wss));
-    console.log("> VNC proxy WebSocket handler attached on /api/vnc-proxy");
-
-    // Start HTTPS server on separate port
-    const httpsPort = parseInt(process.env.HTTPS_PORT || "3001", 10);
-    if (httpsPort > 0) {
-      const tlsOpts = ensureTlsCert();
-      if (tlsOpts) {
-        const requestHandler = typeof args[args.length - 1] === "function" ? args[args.length - 1] : null;
-        if (requestHandler) {
-          const httpsServer = https.createServer(tlsOpts, requestHandler);
-          const wssHttps = newWss();
-          httpsServer.on("upgrade", createUpgradeHandler(wssHttps));
-          watchTlsFiles(httpsServer);
-          const hostname = process.env.HOSTNAME || "0.0.0.0";
-          httpsServer.listen(httpsPort, hostname, () => {
-            console.log(`> HTTPS server listening on https://${hostname}:${httpsPort}`);
-          });
-        }
-      }
+  // Start HTTPS server on separate port
+  let httpsPort = parseInt(process.env.HTTPS_PORT || "3001", 10);
+  let httpsUp = false;
+  if (httpsPort > 0) {
+    const tlsOpts = ensureTlsCert();
+    if (tlsOpts) {
+      const httpsServer = https.createServer(tlsOpts, overHttps(clean));
+      const wssHttps = newWss();
+      httpsServer.on("upgrade", createUpgradeHandler(wssHttps, () => true));
+      watchTlsFiles(httpsServer);
+      const hostname = process.env.HOSTNAME || "0.0.0.0";
+      httpsServer.listen(httpsPort, hostname, () => {
+        console.log(`> HTTPS server listening on https://${hostname}:${httpsPort}`);
+      });
+      httpsUp = true;
     }
   }
+  if (!httpsUp) httpsPort = 0;
+
+  args[last] = overHttp(clean, httpsPort);
+  const server = originalCreateServer(...args);
+  // A console over plain HTTP only from this machine, a trusted HTTPS proxy, or with HTTPS off.
+  const wss = newWss();
+  server.on("upgrade", createUpgradeHandler(wss, (req) => httpsPort === 0 || isLoopback(req) || forwardedHttps(req)));
+  console.log("> VNC proxy WebSocket handler attached on /api/vnc-proxy");
+  if (httpsPort > 0) console.log(`> Plain HTTP is redirected to HTTPS (port ${PUBLIC_HTTPS_PORT || httpsPort})`);
 
   return server;
 };

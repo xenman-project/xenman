@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { changePassword, signToken, validatePassword, verifyToken, COOKIE_NAME } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
+import { setAuthCookie } from "@/lib/auth-cookie";
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,16 +51,7 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json({ success: true });
     if (payload.pwc) {
       // A session without the restriction: the rest of XenMan opens up.
-      const isHttps =
-        request.headers.get("x-forwarded-proto") === "https" ||
-        request.nextUrl.protocol === "https:";
-      response.cookies.set(COOKIE_NAME, signToken(payload.sub, payload.role), {
-        httpOnly: true,
-        secure: isHttps,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24,
-      });
+      setAuthCookie(request, response, signToken(payload.sub, payload.role));
     }
     return response;
   } catch {

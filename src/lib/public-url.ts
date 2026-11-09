@@ -1,6 +1,7 @@
 import os from "os";
 import type { NextRequest } from "next/server";
 import { loadSmtpConfig } from "./smtp-storage";
+import { viaHttps } from "./auth-cookie";
 
 // Where links in mails point. Set in the mail settings, that address is used
 // for every link. Otherwise a mail an administrator causes while signed in
@@ -47,7 +48,7 @@ export function mailBaseUrl(signedInRequest?: NextRequest): string {
   if (set) return set;
   const host = signedInRequest?.headers.get("host");
   if (signedInRequest && host) {
-    const https = signedInRequest.nextUrl.protocol === "https:" || signedInRequest.headers.get("x-forwarded-proto") === "https";
+    const https = viaHttps(signedInRequest);
     return `${https ? "https" : "http"}://${host}`;
   }
   return ownUrl();

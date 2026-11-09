@@ -91,7 +91,7 @@ Host configurations, passwords, and JWT secrets are stored in the `data/` direct
 docker compose up -d
 ```
 
-Runs the published image `ghcr.io/xenman-project/xenman` (`:latest`, or a release such as `:v1.0.1`). The container exposes port `3000` (HTTP) and `3001` (HTTPS) and persists data in a `xen-data` volume.
+Runs the published image `ghcr.io/xenman-project/xenman` (`:latest`, or a release such as `:v1.0.1`). Open `https://<host>:3001`; port `3000` only redirects there. Data persists in a `xen-data` volume.
 
 To build the image from this repository instead: `docker build -t ghcr.io/xenman-project/xenman:latest .`
 
@@ -131,7 +131,9 @@ npm start
 
 XenMan automatically generates a self-signed TLS certificate on first startup and serves HTTPS on port `3001`. On Linux/Docker it uses `openssl`, on Windows it uses PowerShell.
 
-To disable HTTPS, set the environment variable `HTTPS_PORT=0`.
+Plain HTTP is redirected to HTTPS, and HTTPS responses carry HSTS. Only requests from the machine itself stay on HTTP. If a port mapping puts HTTPS on another port than `HTTPS_PORT`, set `XENMAN_PUBLIC_HTTPS_PORT` to the one browsers reach.
+
+To disable HTTPS, set the environment variable `HTTPS_PORT=0` — only behind a proxy that speaks HTTPS to the browsers (see below).
 
 ### Custom Certificate
 
@@ -181,6 +183,8 @@ Passwords stored by earlier versions are re-encrypted with the current key on th
 noVNC asks for the next picture only when the last one has arrived, so on a long round trip the console gets few pictures per second. XenMan sits next to the hosts and asks ahead on the browser's behalf (every 33 ms; `XENMAN_VNC_PUMP_MS`, `0` switches it off), and pings the connection every 25 s (`XENMAN_VNC_PING_MS`) so a quiet console is not cut as idle. **View > Connection info** in the console shows pictures per second, data rate and encoding — compare directly and through the proxy.
 
 On a NetScaler in front of XenMan:
+
+- `XENMAN_TRUST_PROXY=1`, so XenMan takes the client address and `X-Forwarded-Proto: https` from it; the NetScaler must set both and talk to XenMan over HTTPS, or over HTTP with that header.
 
 - WebSocket enabled in the vServer's HTTP profile.
 - No compression, App Firewall or bot checks on `/api/vnc-proxy`: they hold frames back.

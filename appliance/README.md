@@ -105,7 +105,7 @@ into the same pool.
 | Web login | `admin` / `admin` — nothing else opens until it is changed |
 | SSH | off; switched on and off in the console menu only (root, with its own password) |
 | Network | DHCP on `eth0` until set otherwise; the console shows the address it got |
-| Web | `https://<address>/` (port 443, plus plain HTTP on 80) |
+| Web | `https://<address>/` (port 443; plain HTTP on 80 redirects there) |
 | Service | `xenman.service`, logs via `journalctl -u xenman` |
 | Data | `/var/lib/xenman` — users, JWT secret, generated TLS certificate |
 | Install | `/opt/xenman`, Node in `/usr/local` |
