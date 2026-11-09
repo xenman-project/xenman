@@ -15,12 +15,19 @@ section of the version it leads to.
 
 ### Changed
 - Menu entries and buttons no longer end in "...".
+- **Everyone signs in once more after this update**: sessions from before it are no longer accepted (see Security).
 
 ### Fixed
 - Entering maintenance mode left VMs on the host when XenServer's evacuation found no plan (HOST_NOT_ENOUGH_FREE_MEMORY although memory was free). It now works as in XenCenter: WLB's evacuation recommendations are followed when WLB is on, and VMs WLB has no host for are migrated live one by one; without WLB, VMs are migrated live one by one when the evacuation fails; and the host leaves maintenance mode again if anything cannot be moved. The control domain memory dialog waits until the host is empty.
 
 ### Security
 - SSH export of VMs and disks: the export directory and UUID are validated and quoted before they reach the shell on the host. Previously a user allowed to export could run arbitrary commands there.
+- **HTTPS only**: plain HTTP is redirected to HTTPS (on the appliance, port 80 to 443; in Docker, 3000 to 3001), HTTPS responses carry HSTS, and the session cookie is always Secure, HttpOnly and SameSite=Lax. Requests from the machine itself, and from a trusted proxy that received them over HTTPS (`XENMAN_TRUST_PROXY=1`, `X-Forwarded-Proto: https`), are left alone.
+- **Consoles**: viewers can no longer open a console (it takes keyboard and mouse), checked in the API and in the console proxy; a host's control domain is only reachable as the host console, which is for administrators. The console proxy connects only to a console XenMan handed out on that session, instead of any address the browser names.
+- **Sign-ins**: a session ends when it signs out, and all of an account's sessions when its password is changed or set by an administrator, a reset link is used, or the account is removed; a changed role counts at once. Administrators can sign a user out everywhere. Reset and invitation links sent before a new password no longer work.
+- **Passwords**: at least 12 characters with a lowercase letter, an uppercase letter and a number; not containing the user name, and not one of the most common passwords. Existing passwords keep working until they are changed.
+- Next.js 16.4.5 and sharp 0.35.5 fix their published advisories (WebSocket upgrade SSRF, image optimization).
+- The generated TLS key and a PFX file are readable by XenMan alone.
 
 ## [1.0.1] - 2026-11-06
 
