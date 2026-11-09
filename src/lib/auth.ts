@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { writeFileAtomic } from "./atomic-write";
 import { loginSessionValid } from "./login-sessions";
+import { passwordProblem } from "./password-policy";
 
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -16,13 +17,13 @@ const BCRYPT_ROUNDS = 10;
 
 export type UserRole = "admin" | "operator" | "viewer";
 
-/** Validate password against the password policy. Returns null if valid, or an error message. */
-export function validatePassword(password: string): string | null {
-  if (password.length < 6) return "Password must be at least 6 characters";
-  if (!/[a-z]/.test(password)) return "Password must contain a lowercase letter";
-  if (!/[A-Z]/.test(password)) return "Password must contain an uppercase letter";
-  if (!/[0-9]/.test(password)) return "Password must contain a number";
-  return null;
+/**
+ * Validate a new password against the password policy (lib/password-policy.ts),
+ * for the account it is for. Returns null if valid, or an error message.
+ */
+export function validatePassword(password: string, username?: string): string | null {
+  if (typeof password !== "string") return "Password is required";
+  return passwordProblem(password, username);
 }
 
 export interface UserSettings {

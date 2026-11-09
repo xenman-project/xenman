@@ -7,14 +7,10 @@ import { Button } from "@/components/ui/button";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PASSWORD_RULES } from "@/lib/password-policy";
 
-/** The rules of validatePassword in lib/auth.ts, to show them while typing. */
-const RULES: { text: string; ok: (p: string) => boolean }[] = [
-  { text: "At least 6 characters", ok: (p) => p.length >= 6 },
-  { text: "A lowercase letter", ok: (p) => /[a-z]/.test(p) },
-  { text: "An uppercase letter", ok: (p) => /[A-Z]/.test(p) },
-  { text: "A number", ok: (p) => /[0-9]/.test(p) },
-];
+/** The rules of the password policy, shown while typing (the server also refuses the user name and common passwords). */
+const RULES = PASSWORD_RULES;
 
 /**
  * Where a login with the default password lands: nothing else in XenMan opens

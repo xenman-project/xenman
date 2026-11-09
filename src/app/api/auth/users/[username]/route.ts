@@ -125,7 +125,7 @@ export async function PUT(
     }
 
     if (newPassword) {
-      const pwError = validatePassword(newPassword);
+      const pwError = validatePassword(newPassword, username);
       if (pwError) {
         return NextResponse.json({ error: pwError }, { status: 400 });
       }

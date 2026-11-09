@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { AuthShell } from "@/components/auth-shell";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PASSWORD_MIN_LENGTH } from "@/lib/password-policy";
 import { Server } from "lucide-react";
 import { Suspense } from "react";
 
@@ -155,7 +156,7 @@ function InviteForm() {
                   setPassword(e.target.value);
                   setError("");
                 }}
-                placeholder="Min. 6 characters"
+                placeholder={`Min. ${PASSWORD_MIN_LENGTH} characters`}
                 autoFocus
                 autoComplete="new-password"
               />

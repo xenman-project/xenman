@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const pwError = validatePassword(newPassword);
+    const pwError = validatePassword(newPassword, payload.sub);
     if (pwError) {
       return NextResponse.json({ error: pwError }, { status: 400 });
     }

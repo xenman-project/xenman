@@ -92,6 +92,7 @@ import {
 } from "@/components/ui/select";
 import { useTheme, SidebarView, SidebarLayout, SearchMode } from "@/context/theme-context";
 import { useAuth } from "@/context/auth-context";
+import { passwordProblem } from "@/lib/password-policy";
 import { CertConfirm, HostTrustPanel, type ProbedCertificate } from "@/components/host-trust";
 
 function generateId(): string {
@@ -123,7 +124,7 @@ export default function SettingsPage() {
     disconnectFromHost,
     poolJoin,
   } = useXen();
-  const { role } = useAuth();
+  const { role, username: signedInAs } = useAuth();
   const isAdmin = role === "admin";
   const { theme, setTheme, sidebarView, setSidebarView, sidebarLayout, setSidebarLayout, searchMode, setSearchMode, eventPolling, setEventPolling } = useTheme();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -389,12 +390,9 @@ export default function SettingsPage() {
       setPwChangeError("Please fill in all fields.");
       return;
     }
-    if (newPassword.length < 6) {
-      setPwChangeError("Password must be at least 6 characters.");
-      return;
-    }
-    if (!/[a-z]/.test(newPassword) || !/[A-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
-      setPwChangeError("Password must contain uppercase, lowercase, and a number.");
+    const problem = passwordProblem(newPassword, signedInAs ?? undefined);
+    if (problem) {
+      setPwChangeError(`${problem}.`);
       return;
     }
     if (newPassword !== confirmPassword) {

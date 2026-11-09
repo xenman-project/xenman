@@ -31,13 +31,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const pwError = validatePassword(password);
+    // Resolve the account before the token is consumed, so the entry can name it.
+    const target = getInviteUser(token);
+
+    const pwError = validatePassword(password, target?.username);
     if (pwError) {
       return NextResponse.json({ error: pwError }, { status: 400 });
     }
-
-    // Resolve the account before the token is consumed, so the entry can name it.
-    const target = getInviteUser(token);
 
     const result = acceptInvite(token, password);
     if (!result.success) {

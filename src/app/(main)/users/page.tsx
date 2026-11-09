@@ -69,6 +69,7 @@ import {
   LogOut,
 } from "lucide-react";
 import Link from "next/link";
+import { PASSWORD_MIN_LENGTH, passwordProblem } from "@/lib/password-policy";
 
 interface UserRecord {
   username: string;
@@ -303,12 +304,9 @@ export default function UsersPage() {
       setResetError("Passwords do not match");
       return;
     }
-    if (resetPassword.length < 6) {
-      setResetError("Password must be at least 6 characters");
-      return;
-    }
-    if (!/[a-z]/.test(resetPassword) || !/[A-Z]/.test(resetPassword) || !/[0-9]/.test(resetPassword)) {
-      setResetError("Password must contain uppercase, lowercase, and a number");
+    const problem = passwordProblem(resetPassword, resetPwUser);
+    if (problem) {
+      setResetError(problem);
       return;
     }
     setResetError("");
@@ -687,7 +685,7 @@ export default function UsersPage() {
                   setAddPassword(e.target.value);
                   setAddError("");
                 }}
-                placeholder={addEmail ? "Leave empty to send invitation" : "Min. 6 characters"}
+                placeholder={addEmail ? "Leave empty to send invitation" : `Min. ${PASSWORD_MIN_LENGTH} characters`}
               />
               {addEmail && !addPassword && (
                 <p className="text-xs text-zinc-500">
@@ -874,7 +872,7 @@ export default function UsersPage() {
                   setResetPassword(e.target.value);
                   setResetError("");
                 }}
-                placeholder="Min. 4 characters"
+                placeholder={`Min. ${PASSWORD_MIN_LENGTH} characters`}
               />
             </div>
             <div className="grid gap-2">

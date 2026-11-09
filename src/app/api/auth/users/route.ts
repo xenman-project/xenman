@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (password) {
-      const pwError = validatePassword(password);
+      const pwError = validatePassword(password, typeof username === "string" ? username : undefined);
       if (pwError) {
         return NextResponse.json({ error: pwError }, { status: 400 });
       }
