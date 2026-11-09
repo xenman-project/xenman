@@ -116,6 +116,44 @@ function verifyJwtSync(token, secret) {
   }
 }
 
+// --- The signed-in user behind a token, as verifyToken() in src/lib/auth.ts ---
+// The sign-in must still be recorded in sessions.json (lib/login-sessions.ts)
+// and the account must exist; the role is the account's role now. Both files
+// are read again only when they changed.
+const jsonCache = new Map();
+function readJsonCached(file) {
+  let stamp = "none";
+  try {
+    const s = fs.statSync(file);
+    stamp = `${s.mtimeMs}:${s.size}`;
+  } catch {
+    // Missing: nothing in it.
+  }
+  const hit = jsonCache.get(file);
+  if (hit && hit.stamp === stamp) return hit.value;
+  let value = [];
+  try {
+    value = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    value = [];
+  }
+  jsonCache.set(file, { stamp, value });
+  return value;
+}
+
+function signedInUser(token) {
+  const payload = verifyJwtSync(token, process.env.JWT_SECRET);
+  if (!payload || typeof payload.sub !== "string" || typeof payload.sid !== "string") return null;
+  const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
+  const sessions = readJsonCached(path.join(DATA_DIR, "sessions.json"));
+  const session = Array.isArray(sessions) && sessions.find((s) => s && s.sid === payload.sid);
+  if (!session || !same(session.user, payload.sub) || Date.parse(session.expiresAt) <= Date.now()) return null;
+  const users = readJsonCached(path.join(DATA_DIR, "users.json"));
+  const user = Array.isArray(users) && users.find((u) => u && same(u.username, payload.sub));
+  if (!user || !user.passwordHash) return null;
+  return { sub: user.username, role: user.role || "admin", pwc: Boolean(payload.pwc || user.mustChangePassword) };
+}
+
 function getTokenFromCookies(cookieHeader) {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(/(?:^|;\s*)xenman-auth=([^;]*)/);
@@ -266,10 +304,16 @@ function createUpgradeHandler(wss, transportOk) {
         return;
       }
       const token = getTokenFromCookies(req.headers.cookie);
-      const payload = token ? verifyJwtSync(token, process.env.JWT_SECRET) : null;
+      const payload = token ? signedInUser(token) : null;
       // pwc: still on the default password, which has to be changed first.
       if (!payload || payload.pwc) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      // A console takes keyboard and mouse: not for viewers.
+      if (payload.role !== "admin" && payload.role !== "operator") {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
         socket.destroy();
         return;
       }

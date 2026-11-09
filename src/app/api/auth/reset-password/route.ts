@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getResetUser, acceptResetToken, validatePassword } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
+import { endUserSessions } from "@/lib/login-sessions";
+import { removeSessionsForActor } from "@/lib/xen-sessions";
 
 // GET — validate token and return user info
 export async function GET(request: NextRequest) {
@@ -60,6 +62,11 @@ export async function POST(request: NextRequest) {
       outcome: "success",
       detail: "New password set via reset link",
     });
+    // Whoever is signed in with the forgotten password is out.
+    if (result.username) {
+      endUserSessions(result.username);
+      removeSessionsForActor(result.username);
+    }
 
     return NextResponse.json({ success: true });
   } catch {

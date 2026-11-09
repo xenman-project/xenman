@@ -5,7 +5,8 @@ import {
   signToken,
   mustChangePassword,
 } from "@/lib/auth";
-import { setAuthCookie, viaHttps } from "@/lib/auth-cookie";
+import { SESSION_SECONDS, setAuthCookie, viaHttps } from "@/lib/auth-cookie";
+import { startLoginSession } from "@/lib/login-sessions";
 import { auditRequest, clientIp } from "@/lib/audit";
 import { loginBlocked, loginFailed, loginSucceeded, waitText } from "@/lib/login-guard";
 
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
 
     // The default password: everything else stays closed until it is changed.
     const changeFirst = mustChangePassword(user, password);
-    const token = signToken(user.username, user.role, changeFirst);
+    const token = signToken(user.username, user.role, startLoginSession(user.username, SESSION_SECONDS), changeFirst);
 
     const isHttps = viaHttps(request);
 

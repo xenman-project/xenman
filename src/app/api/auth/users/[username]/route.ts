@@ -12,6 +12,14 @@ import {
 } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
 import { removeSessionsForActor } from "@/lib/xen-sessions";
+import { endUserSessions } from "@/lib/login-sessions";
+
+/** Every sign-in of a user ended, and the pool connections opened with them. */
+function signOutEverywhere(username: string): number {
+  const ended = endUserSessions(username);
+  removeSessionsForActor(username);
+  return ended;
+}
 
 /** Snapshot of a user before modification, so entries can log before → after. */
 function currentUser(username: string) {
@@ -30,7 +38,7 @@ export async function PUT(
   try {
     const { username } = await params;
     const body = await request.json();
-    const { role, newPassword, email, pools } = body;
+    const { role, newPassword, email, pools, signOut } = body;
 
     const before = currentUser(username);
 
@@ -122,6 +130,7 @@ export async function PUT(
         return NextResponse.json({ error: pwError }, { status: 400 });
       }
       const result = resetUserPassword(username, newPassword);
+      const ended = result.success ? signOutEverywhere(username) : 0;
       if (!result.success) {
         auditRequest(request, {
           category: "user",
@@ -137,7 +146,19 @@ export async function PUT(
         action: "user_password_reset",
         target: `user ${username}`,
         outcome: "success",
-        detail: "Password set by administrator",
+        detail: `Password set by administrator${ended ? `, ${ended} sign-in(s) ended` : ""}`,
+      });
+    }
+
+    if (signOut === true) {
+      if (!before) return NextResponse.json({ error: "User not found" }, { status: 404 });
+      const ended = signOutEverywhere(username);
+      auditRequest(request, {
+        category: "user",
+        action: "user_signed_out",
+        target: `user ${username}`,
+        outcome: "success",
+        detail: `${ended} sign-in(s) ended`,
       });
     }
 
@@ -171,7 +192,8 @@ export async function DELETE(
       });
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
-    // The account is gone — tear down any XAPI sessions still bound to it.
+    // The account is gone — its sign-ins and the XAPI sessions bound to it too.
+    endUserSessions(username);
     const dropped = removeSessionsForActor(username);
     auditRequest(request, {
       category: "user",

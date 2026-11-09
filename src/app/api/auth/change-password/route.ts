@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { changePassword, signToken, validatePassword, verifyToken, COOKIE_NAME } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
 import { setAuthCookie } from "@/lib/auth-cookie";
+import { endUserSessions } from "@/lib/login-sessions";
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,17 +42,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: result.error }, { status: 400 });
     }
 
+    // A new password ends every other sign-in of this account: someone who
+    // knew the old one, or holds a copied session, is out.
+    const ended = endUserSessions(payload.sub, payload.sid);
     auditRequest(request, {
       category: "auth",
       action: "change_password",
       outcome: "success",
-      detail: payload.pwc ? "Default password replaced" : "Own password changed",
+      detail: (payload.pwc ? "Default password replaced" : "Own password changed") + (ended ? `, ${ended} other sign-in(s) ended` : ""),
     });
 
     const response = NextResponse.json({ success: true });
     if (payload.pwc) {
       // A session without the restriction: the rest of XenMan opens up.
-      setAuthCookie(request, response, signToken(payload.sub, payload.role));
+      setAuthCookie(request, response, signToken(payload.sub, payload.role, payload.sid));
     }
     return response;
   } catch {

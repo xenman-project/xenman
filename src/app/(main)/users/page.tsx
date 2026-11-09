@@ -66,6 +66,7 @@ import {
   Eye,
   Mail,
   Clock,
+  LogOut,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -243,6 +244,23 @@ export default function UsersPage() {
       setError("Failed to resend invitation");
     } finally {
       setResendLoading(null);
+    }
+  }
+
+  /** Ends every sign-in of the user: each browser has to sign in again. */
+  async function handleSignOut(username: string) {
+    try {
+      const res = await fetch(`/api/auth/users/${encodeURIComponent(username)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signOut: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to sign the user out");
+      }
+    } catch {
+      setError("Failed to sign the user out");
     }
   }
 
@@ -539,6 +557,13 @@ export default function UsersPage() {
                                     Reset Password
                                   </DropdownMenuItem>
                                 )}
+                                <DropdownMenuItem
+                                  disabled={isSelf || user.invited}
+                                  onClick={() => handleSignOut(user.username)}
+                                >
+                                  <LogOut className="mr-2 h-4 w-4" />
+                                  Sign Out Everywhere
+                                </DropdownMenuItem>
                                 <DropdownMenuItem
                                   disabled={isSelf}
                                   className="text-red-600 focus:text-red-600"

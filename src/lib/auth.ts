@@ -4,6 +4,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { writeFileAtomic } from "./atomic-write";
+import { loginSessionValid } from "./login-sessions";
 
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -49,12 +50,17 @@ export interface StoredUser {
   mustChangePassword?: boolean;
 }
 
-/** What a valid session token carries. */
+/**
+ * Who a valid session token belongs to. The role is the user's role now, not
+ * the one in the token: a changed role counts at once.
+ */
 export interface TokenPayload {
   sub: string;
   role: UserRole;
   /** The password has to be changed before anything else is allowed. */
   pwc?: boolean;
+  /** The sign-in (lib/login-sessions.ts): ended by signing out, a new password, or the account's removal. */
+  sid: string;
 }
 
 /**
@@ -194,27 +200,48 @@ export function verifyCredentials(
   return user;
 }
 
-export function signToken(username: string, role: UserRole, passwordChangeRequired = false): string {
+/** A session token for a sign-in recorded with startLoginSession(). */
+export function signToken(username: string, role: UserRole, sid: string, passwordChangeRequired = false): string {
   const secret = process.env.JWT_SECRET || ensureJwtSecret();
-  return jwt.sign({ sub: username, role, ...(passwordChangeRequired ? { pwc: true } : {}) }, secret, {
+  return jwt.sign({ sub: username, role, sid, ...(passwordChangeRequired ? { pwc: true } : {}) }, secret, {
     algorithm: "HS256",
     expiresIn: JWT_EXPIRY,
   });
 }
 
+let usersCache: { stamp: string; users: StoredUser[] } | null = null;
+
+/** users.json for checking tokens, read again only when the file changed. Not to be modified. */
+function usersForCheck(): StoredUser[] {
+  let stamp = "none";
+  try {
+    const s = fs.statSync(USERS_FILE);
+    stamp = `${s.mtimeMs}:${s.size}`;
+  } catch {
+    // No users yet.
+  }
+  if (!usersCache || usersCache.stamp !== stamp) usersCache = { stamp, users: loadUsers() };
+  return usersCache.users;
+}
+
+/**
+ * The signed-in user behind a token, or null. Besides the signature and the
+ * expiry: the sign-in must still be recorded (signing out, a new password or
+ * the account's removal end it) and the account must exist; the role is the
+ * account's role now.
+ */
 export function verifyToken(token: string): TokenPayload | null {
   try {
     const secret = process.env.JWT_SECRET || ensureJwtSecret();
     const payload = jwt.verify(token, secret, {
       algorithms: ["HS256"],
-    }) as { sub: string; role?: UserRole; pwc?: boolean };
-    // Backfill: old tokens without role — look up from disk
-    if (!payload.role) {
-      const role = getUserRole(payload.sub);
-      if (!role) return null;
-      payload.role = role;
-    }
-    return { sub: payload.sub, role: payload.role, ...(payload.pwc ? { pwc: true } : {}) };
+    }) as { sub?: string; sid?: string; pwc?: boolean };
+    if (typeof payload.sub !== "string" || typeof payload.sid !== "string") return null;
+    if (!loginSessionValid(payload.sid, payload.sub)) return null;
+    const user = usersForCheck().find((u) => u.username.toLowerCase() === payload.sub!.toLowerCase());
+    if (!user || !user.passwordHash) return null;
+    const pwc = Boolean(payload.pwc || user.mustChangePassword);
+    return { sub: user.username, role: user.role, sid: payload.sid, ...(pwc ? { pwc: true } : {}) };
   } catch {
     return null;
   }
@@ -238,8 +265,17 @@ export function changePassword(
   }
   user.passwordHash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
   delete user.mustChangePassword;
+  dropPasswordLinks(user);
   saveUsers(users);
   return { success: true };
+}
+
+/** A new password: reset and invitation links sent before it no longer work. */
+function dropPasswordLinks(user: StoredUser) {
+  delete user.resetToken;
+  delete user.resetTokenExpiry;
+  delete user.inviteToken;
+  delete user.inviteTokenExpiry;
 }
 
 // ── User management functions ───────────────────────────────────────────
@@ -397,6 +433,7 @@ export function resetUserPassword(
   );
   if (!user) return { success: false, error: "User not found" };
   user.passwordHash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
+  dropPasswordLinks(user);
   saveUsers(users);
   return { success: true };
 }
@@ -429,7 +466,7 @@ export function getResetUser(token: string): { username: string } | null {
   return { username: user.username };
 }
 
-export function acceptResetToken(token: string, password: string): { success: boolean; error?: string } {
+export function acceptResetToken(token: string, password: string): { success: boolean; error?: string; username?: string } {
   const users = loadUsers();
   const user = users.find((u) => u.resetToken === token);
   if (!user) return { success: false, error: "Invalid or expired reset link" };
@@ -438,10 +475,9 @@ export function acceptResetToken(token: string, password: string): { success: bo
   }
   user.passwordHash = bcrypt.hashSync(password, BCRYPT_ROUNDS);
   delete user.mustChangePassword; // a password of their own choosing
-  delete user.resetToken;
-  delete user.resetTokenExpiry;
+  dropPasswordLinks(user);
   saveUsers(users);
-  return { success: true };
+  return { success: true, username: user.username };
 }
 
 // The stored XenServer and mail passwords are encrypted in lib/secret-box.ts,
