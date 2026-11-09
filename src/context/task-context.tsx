@@ -95,21 +95,32 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
         try {
           const apiHost = conn.connectedVia || conn.host.address;
+          // "job:<id>": a XenMan job (maintenance mode), followed like a XenServer task.
+          const jobId = task.taskRef.startsWith("job:") ? task.taskRef.slice(4) : null;
           const res = await fetch("/api/xen", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              action: "task_status",
+              action: jobId ? "host_maintenance_job_status" : "task_status",
               host: apiHost,
               port: conn.host.port,
               useSsl: conn.host.useSsl,
               sessionRef: conn.session.sessionRef,
-              taskRef: task.taskRef,
+              ...(jobId ? { jobId } : { taskRef: task.taskRef }),
             }),
           });
 
           if (!res.ok) continue;
-          const data = await res.json();
+          let data = await res.json();
+          if (jobId) {
+            const job = data.job ?? {};
+            data = {
+              status: job.state === "done" ? "success" : job.state === "failed" ? "failure" : "pending",
+              progress: job.progress,
+              errorInfo: job.error ? [job.error] : undefined,
+              step: job.step,
+            };
+          }
 
           setTasks((prev) =>
             prev.map((t) => {
@@ -120,6 +131,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
                 : "pending";
               return {
                 ...t,
+                description: typeof data.step === "string" && data.step ? data.step : t.description,
                 progress: status === "success" ? 1 : Number(data.progress || t.progress),
                 status,
                 error: data.status === "failure" && data.errorInfo

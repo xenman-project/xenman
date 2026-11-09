@@ -133,6 +133,7 @@ import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReas
 import { finishImport, ImportRefused, importTargets, loadImportRecords } from "@/lib/vm-import";
 import { applyVmGpus, buildVmGpuPage, changeProblem, loadVmGpuRecords } from "@/lib/vm-gpu";
 import { buildSrStates, loadSrRecords, runSrCommand, SrRefused, type SrCommand } from "@/lib/sr-manage";
+import { getMaintenanceJob, runningFor, startMaintenance } from "@/lib/host-maintenance-job";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -814,7 +815,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
-  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states",
+  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -1683,16 +1684,23 @@ async function dispatch(request: NextRequest) {
 
       // Composite maintenance mode actions — matches XenCenter logic
       case "host_maintenance_enter": {
-        // 1. Disable the host first (prevents new VMs from starting)
-        await hostDisable(host, port, useSsl, sessionRef, hostRef);
+        // XenCenter's EvacuateHostAction as a job (lib/host-maintenance-job.ts): what stops it
+        // asked first, WLB's recommendations followed, the host back out of maintenance on failure.
+        if (!isXenRef(hostRef)) return NextResponse.json({ error: "No host given" }, { status: 400 });
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        const already = runningFor(poolId, hostRef);
+        if (already) return NextResponse.json({ job: already });
+        const job = await startMaintenance(
+          { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) },
+          hostRef,
+        );
+        return NextResponse.json({ job }, { status: 202 });
+      }
 
-        // 2. Set MAINTENANCE_MODE flag after disable (XenCenter order)
-        try { await hostRemoveFromOtherConfig(host, port, useSsl, sessionRef, hostRef, "MAINTENANCE_MODE"); } catch { /* key may not exist */ }
-        await hostAddToOtherConfig(host, port, useSsl, sessionRef, hostRef, "MAINTENANCE_MODE", "true");
-
-        // 3. Evacuate (async — returns task ref for progress tracking)
-        const evacuateTaskRef = await hostEvacuateAsync(host, port, useSsl, sessionRef, hostRef);
-        return NextResponse.json({ taskRef: evacuateTaskRef });
+      case "host_maintenance_job_status": {
+        const job = getMaintenanceJob(String(body.jobId ?? ""));
+        if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
+        return NextResponse.json({ job });
       }
 
       case "host_maintenance_exit": {

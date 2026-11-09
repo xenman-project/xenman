@@ -48,6 +48,8 @@ export function Dom0MemoryDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<Dom0MemoryJob | null>(null);
+  // Entering maintenance mode from here: its job, followed until the host is empty.
+  const [maint, setMaint] = useState<{ id: string; state: string; step: string; error?: string } | null>(null);
   const { hostMaintenanceEnter } = useXen();
   const { addTask } = useTask();
 
@@ -74,20 +76,38 @@ export function Dom0MemoryDialog({
       const taskRef = await hostMaintenanceEnter(conn.host.id, host.hostRef);
       if (taskRef) {
         addTask({ taskRef, hostId: conn.host.id, type: "host_evacuate", label: `Evacuating ${host.hostName}`, description: "Migrating all VMs to other hosts" });
+        if (taskRef.startsWith("job:")) setMaint({ id: taskRef.slice(4), state: "running", step: "Checking which VMs can be moved" });
       }
-      onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  // The job, until it is over.
-  const jobId = job?.id;
-  const running = job?.state === "running";
   const changedRef = useRef(onChanged);
   useEffect(() => {
     changedRef.current = onChanged;
   });
+  // The maintenance job, until the host is empty -- the setting stays locked meanwhile.
+  const maintId = maint?.id;
+  const maintRunning = maint?.state === "running";
+  useEffect(() => {
+    if (!maintId || !maintRunning) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await xenNet(conn, { action: "host_maintenance_job_status", jobId: maintId });
+        setMaint({ id: maintId, state: res.job.state, step: res.job.step, error: res.job.error });
+        if (res.job.state !== "running") changedRef.current();
+      } catch {
+        // Asked again at the next tick.
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [conn, maintId, maintRunning]);
+  const editable = host.maintenance && !maintRunning;
+
+  // The job, until it is over.
+  const jobId = job?.id;
+  const running = job?.state === "running";
   useEffect(() => {
     if (!jobId || !running) return;
     const timer = setInterval(async () => {
@@ -128,7 +148,7 @@ export function Dom0MemoryDialog({
             <p>Specify the amount of memory to be allocated to the Control Domain on this server.</p>
             <div className="flex items-center gap-3">
               <span>Control Domain memory:</span>
-              <fieldset disabled={!host.maintenance} className={host.maintenance ? "" : "opacity-60"}>
+              <fieldset disabled={!editable} className={editable ? "" : "opacity-60"}>
                 <Spinner
                   value={value}
                   range={{ min: cd.staticMin, max: cd.max }}
@@ -139,7 +159,16 @@ export function Dom0MemoryDialog({
               </fieldset>
               <span>{units === "GB" ? "GiB" : "MiB"}</span>
             </div>
-            {host.maintenance ? (
+            {maint && maint.state !== "done" ? (
+              <p className={`flex items-start gap-2 ${maint.state === "failed" ? "text-destructive" : ""}`}>
+                {maint.state === "running" ? (
+                  <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+                ) : (
+                  <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                )}
+                <span>{maint.state === "failed" ? maint.error : maint.step}</span>
+              </p>
+            ) : host.maintenance ? (
               <p className="flex items-start gap-2">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-600" />
                 Changes to this setting will trigger a server reboot.
@@ -171,7 +200,7 @@ export function Dom0MemoryDialog({
             </Button>
           ) : (
             <>
-              <Button disabled={!host.maintenance || !changed || busy} onClick={() => setConfirm(true)}>
+              <Button disabled={!editable || !changed || busy} onClick={() => setConfirm(true)}>
                 {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 OK
               </Button>

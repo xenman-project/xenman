@@ -950,7 +950,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
         hostRef: xenHostRef,
       };
 
-      // Single composite action: set flag → disable → evacuate (async)
+      // A job on the server (lib/host-maintenance-job.ts); the task list follows it as "job:<id>".
       const res = await fetch("/api/xen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -964,7 +964,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
 
       const data = await res.json();
       await refreshHost(hostId);
-      return data.taskRef || null;
+      return data.job?.id ? `job:${data.job.id}` : null;
     },
     [state.connections, refreshHost],
   );
