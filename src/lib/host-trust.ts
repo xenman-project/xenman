@@ -168,7 +168,13 @@ function write(data: TrustFile) {
   cache = null;
 }
 
+/** Pool ids and addresses are keys in the trust file: never one of Object.prototype's. */
+function ownKey(key: string): boolean {
+  return key !== "__proto__" && key !== "constructor" && key !== "prototype";
+}
+
 function update(poolId: string, f: (p: PoolTrust) => void) {
+  if (!ownKey(poolId)) throw new Error("Invalid pool id");
   const data = read();
   const p = (data.pools[poolId] ??= { certs: [] });
   f(p);

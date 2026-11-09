@@ -3,6 +3,7 @@ import { generateResetToken } from "@/lib/auth";
 import { auditRequest, clientIp } from "@/lib/audit";
 import { resetAllowed } from "@/lib/login-guard";
 import { mailBaseUrl } from "@/lib/public-url";
+import { escapeHtml } from "@/lib/html-escape";
 import { loadSmtpConfig } from "@/lib/smtp-storage";
 import nodemailer from "nodemailer";
 
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
       to: result.email,
       subject: "XenMan – Password Reset",
       text: `Hello ${result.username},\n\nA password reset was requested for your XenMan account. Click the link below to set a new password:\n\n${resetUrl}\n\nThis link expires in 1 hour.\n\nIf you did not request this, you can ignore this email.`,
-      html: `<p>Hello <strong>${result.username}</strong>,</p><p>A password reset was requested for your XenMan account. Click the link below to set a new password:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour.</p><p style="color:#888;font-size:12px">If you did not request this, you can ignore this email.</p>`,
+      html: `<p>Hello <strong>${escapeHtml(result.username ?? "")}</strong>,</p><p>A password reset was requested for your XenMan account. Click the link below to set a new password:</p><p><a href="${escapeHtml(resetUrl)}">${escapeHtml(resetUrl)}</a></p><p>This link expires in 1 hour.</p><p style="color:#888;font-size:12px">If you did not request this, you can ignore this email.</p>`,
     });
 
     return NextResponse.json({ success: true });

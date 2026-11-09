@@ -4,6 +4,7 @@ import { listUsers, addUser, validatePassword, refreshInviteToken, type UserRole
 import { auditRequest } from "@/lib/audit";
 import { loadSmtpConfig } from "@/lib/smtp-storage";
 import { mailBaseUrl } from "@/lib/public-url";
+import { escapeHtml } from "@/lib/html-escape";
 import nodemailer from "nodemailer";
 
 export async function GET(request: NextRequest) {
@@ -36,7 +37,7 @@ async function sendInviteEmail(email: string, username: string, token: string, r
     to: email,
     subject: "XenMan – You have been invited",
     text: `Hello ${username},\n\nYou have been invited to XenMan. Click the link below to set your password and activate your account:\n\n${inviteUrl}\n\nThis link expires in 48 hours.\n\nIf you did not expect this email, you can ignore it.`,
-    html: `<p>Hello <strong>${username}</strong>,</p><p>You have been invited to XenMan. Click the link below to set your password and activate your account:</p><p><a href="${inviteUrl}">${inviteUrl}</a></p><p>This link expires in 48 hours.</p><p style="color:#888;font-size:12px">If you did not expect this email, you can ignore it.</p>`,
+    html: `<p>Hello <strong>${escapeHtml(username)}</strong>,</p><p>You have been invited to XenMan. Click the link below to set your password and activate your account:</p><p><a href="${escapeHtml(inviteUrl)}">${escapeHtml(inviteUrl)}</a></p><p>This link expires in 48 hours.</p><p style="color:#888;font-size:12px">If you did not expect this email, you can ignore it.</p>`,
   });
 }
 
