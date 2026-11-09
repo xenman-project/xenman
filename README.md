@@ -133,6 +133,8 @@ XenMan automatically generates a self-signed TLS certificate on first startup an
 
 Plain HTTP is redirected to HTTPS, and HTTPS responses carry HSTS. Only requests from the machine itself stay on HTTP. If a port mapping puts HTTPS on another port than `HTTPS_PORT`, set `XENMAN_PUBLIC_HTTPS_PORT` to the one browsers reach.
 
+XenMan's pages may not be shown in a frame on another site (`X-Frame-Options: DENY`, `frame-ancestors 'none'`), and each server takes at most 1000 open connections; `XENMAN_MAX_CONNECTIONS` changes that, `0` lifts it.
+
 To disable HTTPS, set the environment variable `HTTPS_PORT=0` — only behind a proxy that speaks HTTPS to the browsers (see below).
 
 ### Custom Certificate

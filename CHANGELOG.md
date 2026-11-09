@@ -29,6 +29,7 @@ section of the version it leads to.
 - Next.js 16.4.5 and sharp 0.35.5 fix their published advisories (WebSocket upgrade SSRF, image optimization).
 - The generated TLS key and a PFX file are readable by XenMan alone.
 - Invitation and password reset mails no longer take markup in a user name as HTML.
+- No XenMan page can be put in a frame on another site, where a signed-in administrator could be made to click on it unseen; responses also carry `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`. Each server takes at most 1000 open connections (`XENMAN_MAX_CONNECTIONS`).
 
 ## [1.0.1] - 2026-11-06
 

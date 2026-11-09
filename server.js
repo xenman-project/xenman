@@ -362,6 +362,21 @@ const TRANSPORT_HEADER = "x-xenman-transport";
 // The HTTPS port browsers reach, when a port mapping makes it differ from HTTPS_PORT.
 const PUBLIC_HTTPS_PORT = parseInt(process.env.XENMAN_PUBLIC_HTTPS_PORT || "0", 10);
 const HSTS = "max-age=31536000";
+// No page of XenMan in a frame: another site could lay it under its own and
+// have a signed-in administrator click there. Consoles open as windows, not frames.
+const SECURITY_HEADERS = {
+  "X-Frame-Options": "DENY",
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "same-origin",
+};
+// Open connections per server: event polls and consoles hold one each, a
+// handful of administrators never come near it.
+const MAX_CONNECTIONS = parseInt(process.env.XENMAN_MAX_CONNECTIONS || "1000", 10);
+
+function withSecurityHeaders(res) {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+}
 
 function isLoopback(req) {
   const a = String(req.socket.remoteAddress || "");
@@ -388,12 +403,14 @@ function overHttps(handler) {
   return function (req, res) {
     req.headers[TRANSPORT_HEADER] = "https";
     res.setHeader("Strict-Transport-Security", HSTS);
+    withSecurityHeaders(res);
     return handler.call(this, req, res);
   };
 }
 
 function overHttp(handler, httpsPort) {
   return function (req, res) {
+    withSecurityHeaders(res);
     if (forwardedHttps(req)) {
       req.headers[TRANSPORT_HEADER] = "https";
       res.setHeader("Strict-Transport-Security", HSTS);
@@ -439,6 +456,7 @@ http.createServer = function (...args) {
     const tlsOpts = ensureTlsCert();
     if (tlsOpts) {
       const httpsServer = https.createServer(tlsOpts, overHttps(clean));
+      if (MAX_CONNECTIONS > 0) httpsServer.maxConnections = MAX_CONNECTIONS;
       const wssHttps = newWss();
       httpsServer.on("upgrade", createUpgradeHandler(wssHttps, () => true));
       watchTlsFiles(httpsServer);
@@ -453,6 +471,7 @@ http.createServer = function (...args) {
 
   args[last] = overHttp(clean, httpsPort);
   const server = originalCreateServer(...args);
+  if (MAX_CONNECTIONS > 0) server.maxConnections = MAX_CONNECTIONS;
   // A console over plain HTTP only from this machine, a trusted HTTPS proxy, or with HTTPS off.
   const wss = newWss();
   server.on("upgrade", createUpgradeHandler(wss, (req) => httpsPort === 0 || isLoopback(req) || forwardedHttps(req)));
