@@ -163,7 +163,7 @@ import {
 } from "@/lib/xen-network-actions";
 import { mayAccessHost } from "@/lib/pool-access";
 import { buildHostNetworking } from "@/lib/xen-networking";
-import { lookupSession, registerSession, removeSession } from "@/lib/xen-sessions";
+import { grantConsole, lookupSession, registerSession, removeSession } from "@/lib/xen-sessions";
 import { drainPumps, stopPump, type PumpSpec } from "@/lib/xen-event-pump";
 import { withPool } from "@/lib/xen-tls";
 import { CertMismatchError, SshKeyMismatchError, checkSshKey, knownAddresses, sshKeyFingerprint } from "@/lib/host-trust";
@@ -813,7 +813,7 @@ const READ_ONLY_ACTIONS = new Set([
   "connect", "disconnect", "refresh", "host_metrics",
   "vm_isos", "vm_srs", "vm_disks", "vm_nics",
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
-  "pool_networks", "task_status", "vm_console", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
+  "pool_networks", "task_status", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
   "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
@@ -1604,6 +1604,12 @@ async function dispatch(request: NextRequest) {
       }
 
       case "vm_console": {
+        // A console takes keyboard and mouse: not for viewers (vm_console is
+        // not read-only). A host's control domain only through host_console,
+        // which is for administrators.
+        if (await xenApiCall<boolean>(host, port, useSsl, "VM.get_is_control_domain", [sessionRef, vmRef])) {
+          return NextResponse.json({ error: "The control domain's console is the host console" }, { status: 403 });
+        }
         const consoleRefs = await getVmConsoles(
           host,
           port,
@@ -1630,6 +1636,8 @@ async function dispatch(request: NextRequest) {
             bestConsole = { url: location, protocol };
           }
         }
+        // The console proxy connects only to a console handed out here, for this session.
+        if (bestConsole?.url) grantConsole(sessionRef, bestConsole.url);
         return NextResponse.json({
           available: !!bestConsole,
           url: bestConsole?.url || null,
@@ -1648,6 +1656,7 @@ async function dispatch(request: NextRequest) {
         if (!result) {
           return NextResponse.json({ available: false });
         }
+        grantConsole(sessionRef, result.url);
         return NextResponse.json({
           available: true,
           url: result.url,

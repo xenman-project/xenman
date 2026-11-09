@@ -28,6 +28,12 @@ export interface XenSessionEntry {
   useSsl: boolean;
   createdAt: number;
   lastUsed: number;
+  /**
+   * The console locations vm_console/host_console handed out on this session:
+   * the only ones the console proxy (vnc-proxy.js) connects to, so a client
+   * cannot point it at any other address.
+   */
+  consoles?: Set<string>;
 }
 
 const g = globalThis as typeof globalThis & {
@@ -62,6 +68,13 @@ export function lookupSession(sessionRef: string): XenSessionEntry | null {
   }
   entry.lastUsed = Date.now();
   return entry;
+}
+
+/** Lets the console proxy connect to this console location on this session. */
+export function grantConsole(sessionRef: string, location: string): void {
+  const entry = sessions.get(sessionRef);
+  if (!entry) return;
+  (entry.consoles ??= new Set()).add(location);
 }
 
 export function removeSession(sessionRef: string): void {

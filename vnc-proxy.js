@@ -221,6 +221,22 @@ function handleVncUpgrade(ws, req, actor) {
     ws.close(1008, "Unknown session");
     return;
   }
+  // Only a console location XenMan handed out on this session (vm_console,
+  // host_console): the client says which console, never where to connect.
+  if (!bound.consoles || !bound.consoles.has(consoleUrl)) {
+    ws.close(1008, "Unknown console");
+    return;
+  }
+  let parsed;
+  try {
+    parsed = new URL(consoleUrl);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
+    ws.close(1008, "Invalid console location");
+    return;
+  }
   const useSsl = bound.useSsl;
   const trust = globalThis._xenmanTrust;
   if (useSsl && !trust) {
@@ -246,7 +262,6 @@ function handleVncUpgrade(ws, req, actor) {
   // at once, not held back to be combined with the next.
   req.socket.setNoDelay(true);
 
-  const parsed = new URL(consoleUrl);
   const xenHost = parsed.hostname;
   const xenPort = parseInt(parsed.port || (useSsl ? "443" : "80"), 10);
   parsed.searchParams.set("session_id", sessionId);
