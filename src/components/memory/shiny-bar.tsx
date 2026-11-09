@@ -64,7 +64,7 @@ export function Grid({ total, width }: { total: number; width: number }) {
   );
 }
 
-/** A segment as ShinyBar draws it: the colour fading lighter downwards, a shine on the upper half. */
+/** A segment as ShinyBar draws it: the colour fading lighter downwards. The shine over it is the bar's (Shine). */
 export function Segment({
   color,
   width,
@@ -103,11 +103,23 @@ export function Segment({
           </span>
         </div>
       )}
-      <span
-        className="pointer-events-none absolute inset-x-[2px] top-[2px] h-[49%] rounded-t-[3px]"
-        style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0.47), rgba(255,255,255,0.12))" }}
-      />
     </div>
+  );
+}
+
+/**
+ * ShinyBar's "reflection": one rounded band over the upper half of the whole
+ * bar, which each segment shows its part of. Drawn per segment, every narrow
+ * segment got a little shine of its own -- white strokes between the VMs.
+ * Last child of the bar, above the segments and their captions.
+ */
+export function Shine() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-x-[2px] top-[2px] h-[49%] rounded-[3px]"
+      style={{ background: "linear-gradient(to bottom, rgba(255,255,255,0.47), rgba(255,255,255,0.12))" }}
+    />
   );
 }
 

@@ -38,7 +38,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { xenNet } from "@/components/networking/host-networking";
-import { Grid, Segment, SliderHandle, UNUSED, useWidth, VM_USED } from "./shiny-bar";
+import { Grid, Segment, Shine, SliderHandle, UNUSED, useWidth, VM_USED } from "./shiny-bar";
 
 // XenCenter's "Edit..." on the Memory tab: for one VM the Memory Settings
 // dialog (BallooningDialog), for several the Memory Settings wizard
@@ -494,6 +494,7 @@ function EditBar({ basis, state, units, onChange }: { basis: MemoryEditBasis; st
         <div className="relative flex h-5 overflow-hidden rounded-[5px] border border-zinc-800 dark:border-zinc-600">
           {used > 0 && <Segment color={VM_USED} width={at(used)} caption={[usedText]} align="right" tip={tip} />}
           {used < max && <Segment color={UNUSED} grow />}
+          <Shine />
         </div>
         {/* DrawSliderRanges: while a slider is held, the range it may move in, light grey under the bar. */}
         {dragging && (

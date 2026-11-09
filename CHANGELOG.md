@@ -19,6 +19,7 @@ section of the version it leads to.
 
 ### Fixed
 - Entering maintenance mode left VMs on the host when XenServer's evacuation found no plan (HOST_NOT_ENOUGH_FREE_MEMORY although memory was free). It now works as in XenCenter: WLB's evacuation recommendations are followed when WLB is on, and VMs WLB has no host for are migrated live one by one; without WLB, VMs are migrated live one by one when the evacuation fails; and the host leaves maintenance mode again if anything cannot be moved. The control domain memory dialog waits until the host is empty.
+- Memory tab: no white band above the names of the VMs on wider screens, and the shine lies over the whole bar as in XenCenter instead of a stroke in every narrow VM.
 
 ### Security
 - SSH export of VMs and disks: the export directory and UUID are validated and quoted before they reach the shell on the host. Previously a user allowed to export could run arbitrary commands there.

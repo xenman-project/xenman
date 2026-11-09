@@ -7,7 +7,7 @@ import { memorySize, type HostMemory, type MemoryOverview, type VmMemoryRow } fr
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { xenNet } from "@/components/networking/host-networking";
-import { CONTROL_DOMAIN, Grid, Segment, SliderMark, UNUSED, useWidth, VM_COLORS, VM_USED, XEN } from "./shiny-bar";
+import { CONTROL_DOMAIN, Grid, Segment, Shine, SliderMark, UNUSED, useWidth, VM_COLORS, VM_USED, XEN } from "./shiny-bar";
 import { MemoryEditDialog } from "./memory-edit";
 import { Dom0MemoryDialog } from "./dom0-memory-dialog";
 
@@ -143,7 +143,7 @@ function VmRow({ row, onEdit }: { row: VmMemoryRow; onEdit?: () => void }) {
     : [["Memory", row.staticMax, null]];
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
+    <Card className="gap-0 overflow-hidden py-0 sm:gap-0 sm:py-0">
       <div className="flex items-start gap-3 border-b bg-muted/60 px-4 py-2 text-sm">
         <div
           ref={namesRef}
@@ -215,6 +215,7 @@ function VmBar({ row }: { row: VmMemoryRow }) {
         <div className="relative flex h-5 overflow-hidden rounded-[5px] border border-zinc-800 dark:border-zinc-600">
           {row.used > 0 && <Segment color={VM_USED} width={at(row.used)} caption={[used]} align="right" tip={tip} />}
           {row.used < max && <Segment color={UNUSED} grow />}
+          <Shine />
         </div>
         {row.ballooning && (
           <>
@@ -312,6 +313,7 @@ function HostBar({ host }: { host: HostMemory }) {
             );
           })}
           {usedBytes < host.total && <Segment color={UNUSED} grow />}
+          <Shine />
         </div>
       </div>
     </div>
