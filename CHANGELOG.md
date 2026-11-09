@@ -28,6 +28,7 @@ section of the version it leads to.
 - **Passwords**: at least 12 characters with a lowercase letter, an uppercase letter and a number; not containing the user name, and not one of the most common passwords. Existing passwords keep working until they are changed.
 - Next.js 16.4.5 and sharp 0.35.5 fix their published advisories (WebSocket upgrade SSRF, image optimization).
 - The generated TLS key and a PFX file are readable by XenMan alone.
+- Invitation and password reset mails no longer take markup in a user name as HTML.
 
 ## [1.0.1] - 2026-11-06
 
