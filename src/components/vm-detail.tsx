@@ -643,23 +643,25 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
     <div className="flex-1 overflow-auto">
       <div className="mx-auto max-w-7xl px-3 pb-20 pt-3 sm:px-6 sm:pt-6 md:pb-6">
         {/* VM Header */}
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {/* A long name is cut short, never the row of buttons: too little room
+            for both, and the buttons move below the name together. */}
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+          <div className="min-w-0 flex-[1_1_16rem]">
+            <div className="flex items-center gap-x-3">
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+                className="h-8 w-8 shrink-0 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
                 onClick={() => selectVm(null)}
               >
                 <ArrowLeft className="h-4 w-4" />
               </Button>
-              <h2 className="min-w-0 break-words text-xl font-semibold text-zinc-900 dark:text-zinc-100">
+              <h2 className="min-w-0 truncate text-xl font-semibold text-zinc-900 dark:text-zinc-100" title={vm.nameLabel}>
                 {vm.nameLabel}
               </h2>
               <Badge
                 variant="outline"
-                className={`${powerStateColor[vm.powerState]}`}
+                className={`shrink-0 ${powerStateColor[vm.powerState]}`}
               >
                 {vm.powerState}
               </Badge>
@@ -670,7 +672,7 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
             <p className="mt-1 break-all font-mono text-xs text-zinc-400">{vm.uuid}</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <div className="flex flex-wrap items-center gap-2">
             {canAct && (
               <>
                 {/* Console */}
