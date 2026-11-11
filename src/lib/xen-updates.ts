@@ -16,6 +16,7 @@ import { loginToHost, logout, xenApiCall, XenApiError } from "./xen-client";
 import { xenFetch, withPool } from "./xen-tls";
 import { CertMismatchError } from "./host-trust";
 import { learnPool } from "./host-trust-learn";
+import { describeRef } from "./ref-names";
 
 export interface PoolSession {
   hostId: string;
@@ -89,15 +90,31 @@ export function call<T = unknown>(s: PoolSession, method: string, ...params: unk
  * `cancelWhen` says so, the task is cancelled -- XenServer rolls back what it
  * was in the middle of -- and StopRequested is thrown when it has ended.
  */
+/**
+ * For a task whose work can be seen elsewhere -- a host evacuation, the host
+ * empty: when `check` says done for `afterMs` on end while the task is still
+ * pending, the task is cancelled and awaitTask returns SETTLED.
+ */
+export interface Settled {
+  check: () => Promise<boolean>;
+  afterMs: number;
+}
+export const SETTLED = "\u0000settled";
+const SETTLED_CHECK_MS = Number(process.env.XENMAN_XU_SETTLED_CHECK_MS) || 10_000;
+
 export async function awaitTask(
   s: PoolSession,
   taskRef: string,
   timeoutMs: number,
   onProgress?: (p: number) => void,
   cancelWhen?: () => boolean,
+  settled?: Settled,
 ): Promise<string> {
   const end = Date.now() + timeoutMs;
   let cancelled = false;
+  // Since when the work looks done while the task still runs; asked every SETTLED_CHECK_MS.
+  let doneSince = 0;
+  let checkedAt = 0;
   while (Date.now() < end) {
     if (!cancelled && cancelWhen?.()) {
       cancelled = true;
@@ -105,6 +122,18 @@ export async function awaitTask(
     }
     const t = await call<Record<string, unknown>>(s, "task.get_record", taskRef);
     onProgress?.(Number(t.progress) || 0);
+    if (settled && !cancelled && t.status === "pending" && Date.now() - checkedAt >= SETTLED_CHECK_MS) {
+      checkedAt = Date.now();
+      if (await settled.check().catch(() => false)) {
+        doneSince ||= Date.now();
+        if (Date.now() - doneSince >= settled.afterMs) {
+          // Its work is done; the task itself hangs. Cancelled -- whether
+          // XenServer lets go of it is for the caller to check.
+          await call(s, "task.cancel", taskRef).catch(() => {});
+          return SETTLED;
+        }
+      } else doneSince = 0;
+    }
     if (t.status === "success") {
       await call(s, "task.destroy", taskRef).catch(() => {});
       return String(t.result ?? "");
@@ -264,6 +293,12 @@ export function friendlyXapiError(err: unknown): string {
     SESSION_AUTHENTICATION_FAILED: "The stored credentials for this pool were rejected.",
     RBAC_PERMISSION_DENIED: "The stored account lacks the permission for this (pool-admin is needed).",
   };
+  // XenServer says which object is busy and with what: [class, ref, operation, task].
+  if (code === "OTHER_OPERATION_IN_PROGRESS" && err instanceof XenApiError && err.data && err.data.length >= 3) {
+    const [cls, ref, op] = err.data.map(String);
+    const what = describeRef(cls, ref) ?? cls;
+    return `${what} is busy (${op}) — try again in a moment.`;
+  }
   if (known[code]) return known[code];
   const data = err instanceof XenApiError && err.data?.length ? ` (${err.data.map(String).join(", ")})` : "";
   return `${code}${data}`;

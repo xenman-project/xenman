@@ -14,7 +14,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { writeFileAtomic } from "./atomic-write";
-import { mailJobEnded } from "./xen-update-mail";
+import { mailJobAttention, mailJobEnded } from "./xen-update-mail";
+import { rememberRefNames } from "./ref-names";
 import { formatTime } from "./date-format";
 import { serverDateFormat } from "./display-settings";
 import { XenApiError } from "./xen-client";
@@ -27,6 +28,7 @@ import {
   friendlyXapiError,
   openPoolSession,
   readPoolUpdates,
+  SETTLED,
   StopRequested,
   TaskTimeout,
   type HostUpdateState,
@@ -128,6 +130,19 @@ const BUSY_POLL_MS = Number(process.env.XENMAN_XU_BUSY_POLL_MS) || 30_000;
  */
 const MOVE_BACK_PARALLEL = Math.max(1, Number(process.env.XENMAN_XU_MOVE_BACK_PARALLEL) || 4);
 const HOST_RETRY_DELAYS_MS = (process.env.XENMAN_XU_HOST_RETRY_MS || "120000,300000").split(",").map(Number);
+/**
+ * XenServer's evacuation can hang with the host already empty -- seen in the
+ * field at 97 % for an hour after one migration failed. Empty this long while
+ * the task still runs, it is cancelled and the step goes on.
+ */
+const EVAC_EMPTY_MS = Number(process.env.XENMAN_XU_EVAC_EMPTY_MS) || 5 * 60 * 1000;
+/**
+ * A cancelled evacuation XenServer does not let go of leaves the host marked
+ * as being evacuated, and every migration to it is refused -- through the
+ * host's own restart; only restarting the coordinator's toolstack cleared it.
+ * Given this long to clear by itself before an administrator is asked.
+ */
+const STUCK_CLEAR_MS = Number(process.env.XENMAN_XU_STUCK_CLEAR_MS) || 30_000;
 
 export type StepState = "todo" | "running" | "done" | "failed" | "skipped";
 
@@ -223,6 +238,19 @@ export interface Job {
   link?: string;
   /** Workload Balancing was paused by this job and is still to be resumed. */
   wlbPaused?: boolean;
+  /**
+   * Paused for an administrator: XenServer keeps a host marked as being
+   * evacuated after its evacuation was cancelled, and only restarting the
+   * coordinator's toolstack clears it. Set while the job waits; confirmedBy
+   * once someone said go.
+   */
+  attention?: {
+    reason: string;
+    hostNames: string[];
+    coordinatorName: string;
+    since: string;
+    confirmedBy?: string;
+  };
 }
 
 export interface Plan {
@@ -314,6 +342,15 @@ export function requestStop(id: string, by: string): Job | null {
     job.stopRequested = { by, at: new Date().toISOString() };
     save(job);
   }
+  return job;
+}
+
+/** An administrator lets a job waiting for it restart the coordinator's toolstack. */
+export function confirmCoordinatorRestart(id: string, by: string): Job | null {
+  const job = active.get(id);
+  if (!job || job.state !== "running" || !job.attention || job.attention.confirmedBy) return null;
+  job.attention.confirmedBy = by;
+  save(job);
   return job;
 }
 
@@ -927,6 +964,115 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     }
   };
 
+  // ─── an evacuation XenServer does not finish ─────────────────────────────
+  /** Evacuation tasks this job cancelled: XenServer may keep them on the host. */
+  const abandoned = new Set<string>();
+  const isDom0 = new Map<string, boolean>();
+  /** Nothing but the control domain left on the host. */
+  const hostEmpty = async (h: string): Promise<boolean> => {
+    for (const vm of await c.call<string[]>("host.get_resident_VMs", h)) {
+      if (!isDom0.has(vm)) isDom0.set(vm, await c.call<boolean>("VM.get_is_control_domain", vm).catch(() => false));
+      if (!isDom0.get(vm)) return false;
+    }
+    return true;
+  };
+  /** Hosts XenServer still marks as being evacuated by a task this job cancelled. */
+  const stuckHosts = async (): Promise<{ ref: string; name: string }[]> => {
+    if (!abandoned.size) return [];
+    const recs = await c.call<Record<string, Record<string, unknown>>>("host.get_all_records");
+    return Object.entries(recs)
+      .filter(([, r]) => Object.keys((r.current_operations as Record<string, string>) || {}).some((t) => abandoned.has(t)))
+      .map(([ref, r]) => ({ ref, name: String(r.name_label || ref) }));
+  };
+  /** Waits a little for stuck hosts to clear by themselves; their names if they do not. */
+  const stillStuck = async (wait: (ms: number) => Promise<unknown>) => {
+    const until = Date.now() + STUCK_CLEAR_MS;
+    let stuck = await stuckHosts();
+    while (stuck.length && Date.now() < until) {
+      await wait(Math.max(1000, Math.min(POLL_MS, until - Date.now())));
+      stuck = await stuckHosts();
+    }
+    return stuck;
+  };
+  /**
+   * XenServer keeps hosts marked as being evacuated: no VM can move to them.
+   * Seen in the field, through the host's own restart; restarting the
+   * coordinator's toolstack cleared it. That cuts every tool off for a minute,
+   * so it is asked for: the job waits -- with a mail, if mails are on -- until
+   * an administrator confirms in XenMan, or stops it.
+   */
+  const askForCoordinatorRestart = async (step: JobStep, stuck: { ref: string; name: string }[]) => {
+    const [pool] = await c.call<string[]>("pool.get_all");
+    const coordinator = await c.call<string>("pool.get_master", pool);
+    const coordinatorName = await c.call<string>("host.get_name_label", coordinator).catch(() => "the coordinator");
+    const names = stuck.map((x) => x.name);
+    const list = names.join(", ");
+    const reason =
+      `XenServer still marks ${list} as being evacuated: its evacuation was cancelled but did not end, and every VM migration to ` +
+      `${names.length === 1 ? "it" : "them"} is refused until the toolstack of the coordinator ${coordinatorName} is restarted. ` +
+      "VMs keep running; XenCenter, Workload Balancing and other tools lose their connection for about a minute.";
+    job.attention = { reason, hostNames: names, coordinatorName, since: new Date().toISOString() };
+    const before = step.detail;
+    step.detail = `waiting for an administrator to restart the toolstack of ${coordinatorName}`;
+    save(job);
+    onEvent("xen_update_attention", "failure", `pool ${job.poolName}`, reason);
+    if (job.options.mail) {
+      void mailJobAttention(job).then((r) => onEvent("xen_update_mail", r.sent ? "success" : "failure", `pool ${job.poolName}`, `attention needed: ${r.detail}`));
+    }
+    while (!job.attention?.confirmedBy) {
+      if (stopping()) {
+        job.attention = undefined;
+        save(job);
+        throw new StopRequested();
+      }
+      await sleep(1000);
+    }
+    const by = job.attention.confirmedBy;
+    step.detail = `restarting the toolstack of ${coordinatorName}, as ${by} confirmed`;
+    save(job);
+    onEvent("xen_update_coordinator_toolstack", "success", `host ${coordinatorName}`, `confirmed by ${by}: ${list} stayed marked as being evacuated`);
+    await restartToolstack(step, coordinator);
+    const still = await stillStuck(sleep);
+    job.attention = undefined;
+    if (still.length) {
+      save(job);
+      throw new Error(`XenServer still marks ${still.map((x) => x.name).join(", ")} as being evacuated after the toolstack of ${coordinatorName} was restarted`);
+    }
+    abandoned.clear();
+    job.notes.push(`XenServer kept ${list} marked as being evacuated after a cancelled evacuation. ${by} confirmed, and XenMan restarted the toolstack of the coordinator ${coordinatorName}.`);
+    step.detail = before;
+    save(job);
+  };
+  /** Before VMs move: no host is left blocked by an evacuation this job cancelled. */
+  const released = async (step: JobStep) => {
+    const stuck = await stillStuck(pause);
+    if (stuck.length) await askForCoordinatorRestart(step, stuck);
+  };
+  /** Async.host.evacuate, ended early when the host is empty but the task hangs. */
+  const evacuate = async (step: JobStep, h: string, cancel: () => boolean): Promise<void> => {
+    const s = await c.get();
+    const task = await call<string>(s, "Async.host.evacuate", h);
+    let result: string;
+    try {
+      result = await awaitTask(s, task, EVACUATE_MS, undefined, cancel, { check: () => hostEmpty(h), afterMs: EVAC_EMPTY_MS });
+    } catch (err) {
+      // Timed out, cancelled by awaitTask: XenServer may still hold on to it.
+      if (err instanceof TaskTimeout) {
+        abandoned.add(task);
+        await released(step);
+      }
+      throw err;
+    }
+    if (result === SETTLED) {
+      abandoned.add(task);
+      job.notes.push(
+        `XenServer's evacuation of ${step.hostName} did not finish although the host was empty; XenMan cancelled it after ${Math.round(EVAC_EMPTY_MS / 60000) || 1} min.`,
+      );
+      save(job);
+      await released(step);
+    }
+  };
+
   /**
    * What the host itself now says is left to do. The metadata may not have
    * said -- and XenServer will not let a host out of maintenance mode while
@@ -1373,6 +1519,11 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
   };
 
   try {
+    // The hosts' names, for messages that name a busy host (friendlyXapiError).
+    await c
+      .call<Record<string, Record<string, unknown>>>("host.get_all_records")
+      .then((recs) => rememberRefNames(Object.entries(recs).map(([ref, r]) => ({ ref, nameLabel: String(r.name_label ?? ""), uuid: String(r.uuid ?? "") }))))
+      .catch(() => {});
     await pauseWlb();
     // Steps may be added or skipped as the job learns what a host needs.
     steps: for (const step of job.steps) {
@@ -1428,6 +1579,8 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           continue steps;
         }
         case "evacuate": {
+          // A host still blocked by an evacuation cancelled earlier cannot take VMs.
+          await released(step);
           const resident = await c.call<string[]>("host.get_resident_VMs", h);
           const running: string[] = [];
           for (const vm of resident) {
@@ -1450,7 +1603,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           const coldMoved: string[] = [];
           if (vgpus) {
             try {
-              await c.stoppable(cancel, "Async.host.evacuate", EVACUATE_MS, h);
+              await evacuate(step, h, cancel);
             } catch (err) {
               if (err instanceof StopRequested) throw err;
               for (const { vm, name } of (await vgpuFacts(await c.get())).vms.get(h) ?? []) {
@@ -1466,7 +1619,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           let attempts = 1;
           let oneByOne = "";
           try {
-            ({ attempts } = await retry(step, () => c.stoppable(cancel, "Async.host.evacuate", EVACUATE_MS, h), (e) => movable(e) && !noRoom(e)));
+            ({ attempts } = await retry(step, () => evacuate(step, h, cancel), (e) => movable(e) && !noRoom(e)));
           } catch (err) {
             if (!noRoom(err)) throw err;
             oneByOne = await moveOneByOne(step, h, cancel);
@@ -1536,6 +1689,8 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           await enableHost(step, h);
           break;
         case "vms-back": {
+          // Not to a host XenServer still blocks: asked about once, not refused VM by VM.
+          await released(step);
           // This host's VMs, or for a pool every VM this job moved -- several
           // at once (MOVE_BACK_PARALLEL), those with a vGPU one at a time.
           const candidates = [...home].filter(([, from]) => !step.host || from === step.host);

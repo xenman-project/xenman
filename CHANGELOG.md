@@ -4,6 +4,15 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
+## [1.0.3] - Unreleased
+
+### Fixed
+- **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
+- **Updates: a host XenServer keeps blocked.** When XenServer does not let go of a cancelled evacuation, it keeps the host marked as being evacuated and refuses every VM migration to it, even across the host's restart. XenMan now notices this instead of trying each VM four times: the update pauses, administrators get a mail ("attention needed"), and the update offers **Restart the coordinator's toolstack and continue**, which clears it. VMs keep running; tools connected to the pool lose their connection for about a minute.
+
+### Changed
+- When XenServer refuses something because an object is busy, XenMan now says which one and with what (for example "host "xs-01" is busy (evacuate)") instead of "Another operation is running on the pool".
+
 ## [1.0.2] - 2026-11-11
 
 ### Added

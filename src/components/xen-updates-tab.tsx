@@ -100,6 +100,8 @@ interface Job {
   steps: JobStep[];
   error?: string;
   notes: string[];
+  /** Waiting for an administrator to have the coordinator's toolstack restarted. */
+  attention?: { reason: string; hostNames: string[]; coordinatorName: string; since: string; confirmedBy?: string };
 }
 
 /** A finished job is shown this long, then the tab is quiet again. */
@@ -460,12 +462,18 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
   const dates = useDates();
   const [confirmStop, setConfirmStop] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
   const stopping = job.state === "running" && Boolean(job.stopRequested);
+  // Waiting for an administrator, and nobody has answered yet.
+  const waiting = job.state === "running" && !stopping && job.attention && !job.attention.confirmedBy ? job.attention : null;
   const title =
     job.state === "running"
       ? stopping
         ? "Stopping the update…"
-        : "Update in progress"
+        : waiting
+          ? "Update paused — attention needed"
+          : "Update in progress"
       : job.state === "done"
         ? "Update finished"
         : job.state === "failed"
@@ -488,6 +496,18 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
       refreshUpdateBadges();
     }
   }
+
+  async function restartCoordinator() {
+    setRestartError(null);
+    const res = await fetch("/api/xen-updates/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "restart-coordinator", id: job.id }),
+    }).catch(() => null);
+    const json = await res?.json().catch(() => ({}));
+    if (!res?.ok) setRestartError(json?.error ?? "The update could not go on");
+    else if (json.job) onChanged(json.job);
+  }
   // Steps grouped by host, in the order they run.
   const groups: { name: string; steps: JobStep[] }[] = [];
   for (const s of job.steps) {
@@ -502,7 +522,9 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div className="min-w-0 space-y-1.5">
             <CardTitle className="flex items-center gap-2 text-base">
-              {job.state === "running" ? (
+              {waiting ? (
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+              ) : job.state === "running" ? (
                 <Loader2 className={`h-4 w-4 animate-spin ${stopping ? "text-amber-500" : "text-sky-500"}`} />
               ) : job.state === "done" ? (
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
@@ -529,6 +551,23 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
         </div>
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
+        {waiting && (
+          <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200">
+            <p className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span className="min-w-0 break-words">{waiting.reason}</span>
+            </p>
+            {isAdmin ? (
+              <Button size="sm" onClick={() => setConfirmRestart(true)}>
+                <RotateCcw className="mr-2 h-4 w-4" />
+                Restart the coordinator&apos;s toolstack and continue
+              </Button>
+            ) : (
+              <p className="text-xs">An administrator can let the update go on, or stop it.</p>
+            )}
+            {restartError && <Notice tone="error" text={restartError} />}
+          </div>
+        )}
         {groups.map((g, i) => (
           <div key={i} className="space-y-1.5">
             <p className="font-medium">{g.name}</p>
@@ -581,6 +620,22 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
           <AlertDialogFooter>
             <AlertDialogCancel>Keep going</AlertDialogCancel>
             <AlertDialogAction onClick={stop}>Stop the update</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={confirmRestart} onOpenChange={setConfirmRestart}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restart the toolstack of {job.attention?.coordinatorName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              XenServer then lets go of the evacuation that did not end, and the update goes on. VMs keep running. XenCenter,
+              Workload Balancing, Citrix and every other tool connected to the pool lose their connection for about a minute;
+              XenMan reconnects by itself.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Not now</AlertDialogCancel>
+            <AlertDialogAction onClick={restartCoordinator}>Restart and continue</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

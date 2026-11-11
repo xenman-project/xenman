@@ -140,15 +140,47 @@ ${job.link ? `<p style="margin:16px 0 0"><a href="${esc(job.link)}">Every step i
   return { subject, text, html };
 }
 
-/** Sends it; what came of it, for the audit log. Never throws. */
-export async function mailJobEnded(job: Job): Promise<{ sent: boolean; detail: string }> {
+/**
+ * The update waits for an administrator (Job.attention): what holds it, what
+ * the button in XenMan does, and where it is.
+ */
+export function attentionMail(job: Job): { subject: string; text: string; html: string } {
+  const a = job.attention!;
+  const subject = `XenMan: attention needed — update of pool ${job.poolName} paused`;
+  const head = `The update of pool ${job.poolName} is paused and waits for an administrator.`;
+  const since = `Since ${formatDateTime(a.since, serverDateFormat())}; started by ${job.by}.`;
+  const what =
+    `In XenMan, the update offers "Restart the coordinator's toolstack and continue": it restarts the toolstack of ${a.coordinatorName} ` +
+    "and goes on with the update. Or stop the update there.";
+  const text = [head, since, "", a.reason, "", what, ...(job.link ? ["", `The update in XenMan: ${job.link}`] : [])].join("\n");
+  const html = `<div style="font-family:system-ui,sans-serif;font-size:14px;color:#18181b">
+<p style="font-size:16px;font-weight:600;color:#b45309;margin:0 0 4px">${esc(head)}</p>
+<p style="color:#71717a;margin:0 0 16px">${esc(since)}</p>
+<p style="margin:0 0 12px">${esc(a.reason)}</p>
+<p style="margin:0 0 12px">${esc(what)}</p>
+${job.link ? `<p style="margin:16px 0 0"><a href="${esc(job.link)}">The update in XenMan</a></p>` : ""}
+</div>`;
+  return { subject, text, html };
+}
+
+async function send(mail: { subject: string; text: string; html: string }): Promise<{ sent: boolean; detail: string }> {
   const to = adminRecipients();
   if (!smtpConfigured()) return { sent: false, detail: "not sent: no mail server is set up" };
   if (!to.length) return { sent: false, detail: "not sent: no administrator has an email address" };
   try {
-    await sendMail({ to, ...jobMail(job) });
+    await sendMail({ to, ...mail });
     return { sent: true, detail: `sent to ${to.length} administrator${to.length === 1 ? "" : "s"}` };
   } catch (err) {
     return { sent: false, detail: `not sent: ${err instanceof Error ? err.message : "mail server error"}` };
   }
+}
+
+/** Sends it; what came of it, for the audit log. Never throws. */
+export function mailJobEnded(job: Job): Promise<{ sent: boolean; detail: string }> {
+  return send(jobMail(job));
+}
+
+/** The update waits for an administrator. Never throws. */
+export function mailJobAttention(job: Job): Promise<{ sent: boolean; detail: string }> {
+  return send(attentionMail(job));
 }

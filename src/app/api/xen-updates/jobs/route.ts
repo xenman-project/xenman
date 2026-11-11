@@ -6,7 +6,7 @@ import { loadHostsFromDisk } from "@/lib/host-storage";
 import { friendlyXapiError } from "@/lib/xen-updates";
 import { mailStatus } from "@/lib/os-alerts";
 import { mailBaseUrl } from "@/lib/public-url";
-import { getJob, listJobs, planJob, requestStop, startJob, type JobOptions } from "@/lib/xen-update-jobs";
+import { confirmCoordinatorRestart, getJob, listJobs, planJob, requestStop, startJob, type JobOptions } from "@/lib/xen-update-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
  * With dryRun: the plan and what stands in its way, nothing changed.
  * Without: checks again and starts.
  * { action: "stop", id }: asks a running job to stop at the next safe point.
+ * { action: "restart-coordinator", id }: a job waiting for it (attention) goes on.
  */
 export async function POST(request: NextRequest) {
   const auth = requireRole(request, "admin");
@@ -55,6 +56,23 @@ export async function POST(request: NextRequest) {
     if (!stopping) return NextResponse.json({ error: "This update is not running" }, { status: 409 });
     auditRequest(request, { category: "pool", action: "xen_update_stop_requested", target: `pool ${job.poolName}`, outcome: "success" });
     return NextResponse.json({ job: stopping });
+  }
+  if (body.action === "restart-coordinator") {
+    // The update waits for this (Job.attention): its coordinator's toolstack restarted, then on.
+    const job = typeof body.id === "string" ? getJob(body.id) : null;
+    if (!job || !mayAccessHost(auth.payload, job.hostId)) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const confirmed = confirmCoordinatorRestart(job.id, auth.payload.sub);
+    if (!confirmed) return NextResponse.json({ error: "This update is not waiting for that" }, { status: 409 });
+    auditRequest(request, {
+      category: "pool",
+      action: "xen_update_coordinator_restart_confirmed",
+      target: `pool ${job.poolName}`,
+      outcome: "success",
+      detail: `toolstack of ${confirmed.attention?.coordinatorName} to be restarted: ${confirmed.attention?.hostNames.join(", ")} stayed marked as being evacuated`,
+    });
+    return NextResponse.json({ job: confirmed });
   }
   const hostId = typeof body.hostId === "string" ? body.hostId : "";
   const target = body.target === "pool" ? "pool" : typeof body.target === "string" && /^OpaqueRef:[\w-]+$/.test(body.target) ? body.target : null;
