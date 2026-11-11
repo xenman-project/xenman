@@ -4,6 +4,11 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
+## [1.0.3] - 2026-11-11
+
+### Security
+- Node.js 24.22.3, a security release of Node.js (10 November 2026). XenMan 1.0.2 otherwise unchanged.
+
 ## [1.0.2] - 2026-11-11
 
 ### Added
