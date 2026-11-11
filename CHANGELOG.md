@@ -4,7 +4,7 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [1.0.2] - Unreleased
+## [1.0.2] - 2026-11-11
 
 ### Added
 - **Copy VM**: fast clone or full copy onto another storage repository of the pool, with XenCenter's checks for which SRs can take the copy.
