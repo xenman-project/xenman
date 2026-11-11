@@ -9,13 +9,15 @@ A modern web-based management interface for XenServer / XCP-ng hosts and virtual
 Many workflows follow XenCenter's, with its checks and texts, so XenMan feels familiar.
 
 - **Pools & hosts** — several pools at once, maintenance mode, add and remove servers, control domain memory, certificate pinning
-- **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings
+- **Multi-site** — pools at other sites behind NAT or a firewall's virtual IP: each host at an address of its own, or one address with a port per host, so consoles and performance graphs work there too ([details](#pools-at-other-sites-hosts-behind-nat))
+- **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings; virtual GPUs per VM
 - **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
-- **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs (create, repair, detach, forget, destroy) and disks; networks, bonds, VLANs and the management interface
+- **Memory, storage, networking** — XenCenter-style Memory tab with dynamic memory editing; SRs (create, repair, detach, forget, destroy, set as default, reclaim space) and disks; networks, bonds, VLANs and the management interface
 - **GPU** — physical GPUs and vGPUs, placement policy and allowed vGPU types, vGPUs assigned to VMs
-- **Updates & licensing** — host updates with mail notification, License Manager, Workload Balancing
-- **Monitoring** — performance graphs, alerts, events and an audit log
-- **Users** — Admin / Operator / Viewer roles, invitations and password reset by mail, inactivity sign-out
+- **Updates** — host updates host by host: VMs moved away and back, restarts as XenServer asks, Workload Balancing paused meanwhile; a mail at the end, and one when an update needs an administrator
+- **Licensing & WLB** — License Manager, Workload Balancing
+- **Monitoring** — performance graphs, alerts, events and an audit log; syslog forwarding
+- **Users & security** — Admin / Operator / Viewer roles, invitations and password reset by mail, sign-out everywhere, inactivity sign-out; HTTPS only
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
 
