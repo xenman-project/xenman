@@ -64,7 +64,7 @@ rather than using the system's credentials.
 Two variables let you supply both from disk instead:
 
 ```sh
-NODE_TARBALL_DIR=/path/with/node-v24.22.2-linux-x64.tar.xz NPM_CACHE_DIR=/path/to/_cacache/parent   ./appliance/build-appliance.sh
+NODE_TARBALL_DIR=/path/with/node-v24.22.3-linux-x64.tar.xz NPM_CACHE_DIR=/path/to/_cacache/parent   ./appliance/build-appliance.sh
 ```
 
 `NPM_CACHE_DIR` is a directory holding a `_cacache` folder — the layout npm
