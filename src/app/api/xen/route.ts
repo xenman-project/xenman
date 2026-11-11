@@ -167,6 +167,7 @@ import { grantConsole, lookupSession, registerSession, removeSession } from "@/l
 import { drainPumps, stopPump, type PumpSpec } from "@/lib/xen-event-pump";
 import { withPool } from "@/lib/xen-tls";
 import { CertMismatchError, SshKeyMismatchError, checkSshKey, knownAddresses, sshKeyFingerprint } from "@/lib/host-trust";
+import { natAddresses, reachable, reachableUrl } from "@/lib/nat";
 import { learnPool } from "@/lib/host-trust-learn";
 
 // XenServer's self-signed certificates are not checked against a CA but
@@ -914,6 +915,8 @@ async function dispatch(request: NextRequest) {
     // session registry. The body values are only a starting point and are
     // overwritten below — a client cannot aim a request at a pool of its choosing.
     let host = body.host;
+    // The pool the session belongs to: for addresses behind NAT (lib/nat.ts).
+    let poolOfSession: string | undefined;
     let port = body.port;
     let useSsl = body.useSsl;
 
@@ -955,6 +958,7 @@ async function dispatch(request: NextRequest) {
       host = bound.address;
       port = bound.port;
       useSsl = bound.useSsl;
+      poolOfSession = bound.hostId;
     }
 
     switch (action) {
@@ -1013,7 +1017,8 @@ async function dispatch(request: NextRequest) {
               err.data &&
               err.data.length > 0
             ) {
-              connectHost = err.data[0] as string;
+              // Behind NAT the member names the coordinator's own address (lib/nat.ts).
+              connectHost = reachable(hostId, err.data[0] as string);
               try {
                 session = await loginToHost(
                   connectHost,
@@ -1502,7 +1507,7 @@ async function dispatch(request: NextRequest) {
                 xapi<string>("host.get_address", ref),
               ]);
               try {
-                return { name, uuid, isCoordinator: ref === master, rrd: await fetchRrdCached(address, port, useSsl, sessionRef, period) };
+                return { name, uuid, isCoordinator: ref === master, rrd: await fetchRrdCached(reachable(poolOfSession, address), port, useSsl, sessionRef, period, poolOfSession) };
               } catch (err) {
                 throw new Error(name, { cause: err });
               }
@@ -1532,8 +1537,8 @@ async function dispatch(request: NextRequest) {
         } else {
           return NextResponse.json({ error: "Missing vmRef or hostRef" }, { status: 400 });
         }
-        const address = await xapi<string>("host.get_address", target);
-        const rrd = await fetchRrdCached(address, port, useSsl, sessionRef, period);
+        const address = reachable(poolOfSession, await xapi<string>("host.get_address", target));
+        const rrd = await fetchRrdCached(address, port, useSsl, sessionRef, period, poolOfSession);
         return NextResponse.json(perfCharts(rrd, kind, uuid, requests));
       }
 
@@ -1636,7 +1641,8 @@ async function dispatch(request: NextRequest) {
             cRef,
           );
           const protocol = record.protocol as string;
-          const location = record.location as string;
+          // Behind NAT: at the address the host is reached at (lib/nat.ts).
+          const location = reachableUrl(poolOfSession, record.location as string);
           if (!bestConsole || protocol === "rfb") {
             bestConsole = { url: location, protocol };
           }
@@ -1661,6 +1667,7 @@ async function dispatch(request: NextRequest) {
         if (!result) {
           return NextResponse.json({ available: false });
         }
+        result.url = reachableUrl(poolOfSession, result.url);
         grantConsole(sessionRef, result.url);
         return NextResponse.json({
           available: true,
@@ -2874,14 +2881,14 @@ async function dispatch(request: NextRequest) {
         const vdiTargetPath = `${vdiDir}/${exportFileStem(vdiName)}_${vdiTs}.raw`;
         const vdiTarget = (typeof vdiSshHost === "string" && vdiSshHost) || vdiHost.address;
         // Only a host of this pool: the address comes from the browser.
-        if (!knownAddresses(vdiHost.id).some((a) => a.toLowerCase() === vdiTarget.toLowerCase())) {
+        if (![...knownAddresses(vdiHost.id), ...natAddresses(vdiHost.id)].some((a) => a.toLowerCase() === vdiTarget.toLowerCase())) {
           return NextResponse.json({ error: `${vdiTarget} is not a known host of this pool` }, { status: 400 });
         }
         const vdiJobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
         sshExportJobs.set(vdiJobId, { status: "running", targetPath: vdiTargetPath, startedAt: Date.now() });
         runSshCommand(
           vdiHost.id,
-          vdiTarget,
+          reachable(vdiHost.id, vdiTarget),
           vdiHost.sshPort || 22,
           vdiHost.username,
           vdiHost.password,
@@ -2911,14 +2918,14 @@ async function dispatch(request: NextRequest) {
         const targetPath = `${dir}/${exportFileStem(vmName)}_${ts}.xva`;
         const exportTarget = (typeof sshHost === "string" && sshHost) || exportHost.address;
         // Only a host of this pool: the address comes from the browser.
-        if (!knownAddresses(exportHost.id).some((a) => a.toLowerCase() === exportTarget.toLowerCase())) {
+        if (![...knownAddresses(exportHost.id), ...natAddresses(exportHost.id)].some((a) => a.toLowerCase() === exportTarget.toLowerCase())) {
           return NextResponse.json({ error: `${exportTarget} is not a known host of this pool` }, { status: 400 });
         }
         const jobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
         sshExportJobs.set(jobId, { status: "running", targetPath, startedAt: Date.now() });
         runSshCommand(
           exportHost.id,
-          exportTarget,
+          reachable(exportHost.id, exportTarget),
           exportHost.sshPort || 22,
           exportHost.username,
           exportHost.password,

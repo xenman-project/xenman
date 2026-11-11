@@ -301,8 +301,10 @@ const g = globalThis as unknown as { _xenmanRrdCache?: Map<string, { at: number;
 const cache = (g._xenmanRrdCache ??= new Map());
 
 /** fetchRrd, answered from a short cache per host address and period. */
-export function fetchRrdCached(address: string, port: number, useSsl: boolean, session: string, period: RrdPeriod): Promise<RrdExport> {
-  const key = `${address}|${port}|${period}`;
+export function fetchRrdCached(address: string, port: number, useSsl: boolean, session: string, period: RrdPeriod, poolId = ""): Promise<RrdExport> {
+  // Per pool: hosts of two pools behind NAT may report the same internal address,
+  // and a cache is no place to mix them up.
+  const key = `${poolId}|${address}|${port}|${period}`;
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && now - hit.at < CACHE_MS) return hit.rrd;

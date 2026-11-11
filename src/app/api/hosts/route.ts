@@ -7,6 +7,8 @@ import { XenHost } from "@/lib/types";
 import { forgetPool, normalizeFingerprint, probeCertificate, trustCertificate } from "@/lib/host-trust";
 import { loginRefusedMessage, loginToHost, logout, XenApiError } from "@/lib/xen-client";
 import { NotConfirmedError, withPinned } from "@/lib/xen-tls";
+import { cleanNat } from "@/lib/nat";
+import { call, closePoolSession, friendlyXapiError, openPoolSession } from "@/lib/xen-updates";
 
 const FINGERPRINT_RE = /^([0-9A-Fa-f]{2}:?){32}$/;
 const ADDRESS_RE = /^[\w.:-]{1,253}$/;
@@ -43,7 +45,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { action, host, hostId, fingerprint, coordinator } = body as {
-      action: "add" | "remove" | "update" | "probe" | "verify";
+      action: "add" | "remove" | "update" | "probe" | "verify" | "members";
       host?: XenHost;
       hostId?: string;
       /** add: the certificate fingerprint the admin compared and confirmed. */
@@ -53,8 +55,38 @@ export async function POST(request: NextRequest) {
     };
 
     const hosts = loadHostsFromDisk();
+    // The NAT setting is stored only as cleanNat() leaves it.
+    if ((action === "add" || action === "update") && host) {
+      const { nat, error } = cleanNat(host.nat);
+      if (error) return NextResponse.json({ error }, { status: 400 });
+      if (nat) host.nat = nat;
+      else delete host.nat;
+    }
+    const natText = (h?: XenHost) =>
+      h?.nat?.enabled ? `on (${Object.entries(h.nat.hosts).map(([a, b]) => `${a} at ${b}`).join(", ") || "no addresses"})` : "off";
 
     switch (action) {
+      case "members": {
+        // The pool's hosts as XenServer reports them, for the NAT table: which
+        // address each one is to be reached at is the administrator's to say.
+        if (!hostId || !hosts.some((h) => h.id === hostId)) return NextResponse.json({ error: "Pool not found" }, { status: 404 });
+        try {
+          const s = await openPoolSession(hostId);
+          try {
+            const [pool] = await call<string[]>(s, "pool.get_all");
+            const master = await call<string>(s, "pool.get_master", pool);
+            const recs = await call<Record<string, Record<string, unknown>>>(s, "host.get_all_records");
+            const members = Object.entries(recs)
+              .map(([ref, r]) => ({ name: String(r.name_label ?? ""), address: String(r.address ?? ""), coordinator: ref === master }))
+              .sort((a, b) => Number(b.coordinator) - Number(a.coordinator) || a.name.localeCompare(b.name));
+            return NextResponse.json({ members });
+          } finally {
+            await closePoolSession(s);
+          }
+        } catch (err) {
+          return NextResponse.json({ error: friendlyXapiError(err) }, { status: 502 });
+        }
+      }
       case "probe": {
         // The certificate the host presents, for the admin to compare before
         // trusting it. Only the TLS handshake: no credentials are sent.
@@ -132,7 +164,7 @@ export async function POST(request: NextRequest) {
           action: "host_added",
           target: hostLabel(host),
           outcome: "success",
-          detail: `user=${host.username}, ssl=${host.useSsl}, autoConnect=${!!host.autoConnect}${
+          detail: `user=${host.username}, ssl=${host.useSsl}, autoConnect=${!!host.autoConnect}${host.nat?.enabled ? `, NAT ${natText(host)}` : ""}${
             host.useSsl ? `, certificate SHA-256 ${normalizeFingerprint(fingerprint ?? "")} confirmed` : ", unencrypted"
           }${coord ? `, coordinator ${coord.address} SHA-256 ${normalizeFingerprint(coord.fingerprint)} confirmed` : ""}`,
         });
@@ -175,6 +207,9 @@ export async function POST(request: NextRequest) {
           if (previous.username !== host.username) changes.push(`user: ${previous.username} → ${host.username}`);
           if (previous.useSsl !== host.useSsl) changes.push(`ssl: ${previous.useSsl} → ${host.useSsl}`);
           if (previous.autoConnect !== host.autoConnect) changes.push(`autoConnect: ${!!previous.autoConnect} → ${!!host.autoConnect}`);
+          if ((previous.backupAddress ?? "") !== (host.backupAddress ?? "")) changes.push(`backup address: ${previous.backupAddress || "none"} → ${host.backupAddress || "none"}`);
+          if ((previous.sshPort ?? 22) !== (host.sshPort ?? 22)) changes.push(`SSH port: ${previous.sshPort ?? 22} → ${host.sshPort ?? 22}`);
+          if (natText(previous) !== natText(host)) changes.push(`NAT: ${natText(previous)} → ${natText(host)}`);
           if (previous.password !== merged.password) changes.push("password changed");
         }
         auditRequest(request, {

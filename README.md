@@ -180,6 +180,14 @@ The XenServer and mail server passwords are stored AES-256-GCM encrypted in `hos
 
 Passwords stored by earlier versions are re-encrypted with the current key on the next start.
 
+## Pools at other sites (hosts behind NAT)
+
+XenMan can manage a pool it reaches only through NAT, such as a firewall's virtual IP in front of a pool at another site. Add the pool with the address its coordinator is reached at. Everything then works except what XenServer hands out at a host's own management address: consoles, performance graphs, imports and SSH exports. XenCenter has the same limit.
+
+To make those work too, edit the pool under **Settings → Pools** and switch on **Hosts are behind NAT**. XenMan lists the pool's hosts with the address each one reports; enter the address it is reached at from XenMan (the coordinator's is filled in). Each host needs an address of its own, with ports 443 and, for SSH exports, 22 passed through. The firewall must pass TLS through unchanged: every host's certificate is checked against the pool's as before.
+
+Off, which is the default, nothing changes.
+
 ## Consoles behind a reverse proxy (NetScaler)
 
 noVNC asks for the next picture only when the last one has arrived, so on a long round trip the console gets few pictures per second. XenMan sits next to the hosts and asks ahead on the browser's behalf (every 33 ms; `XENMAN_VNC_PUMP_MS`, `0` switches it off), and pings the connection every 25 s (`XENMAN_VNC_PING_MS`) so a quiet console is not cut as idle. **View > Connection info** in the console shows pictures per second, data rate and encoding — compare directly and through the proxy.

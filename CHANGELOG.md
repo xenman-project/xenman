@@ -6,12 +6,16 @@ section of the version it leads to.
 
 ## [1.0.4] - Unreleased
 
+### Added
+- **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached (Settings → Pools → edit → **Hosts are behind NAT**). Off by default; the hosts' certificates are checked as before.
+
 ### Fixed
 - **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
 - **Updates: a host XenServer keeps blocked.** When XenServer does not let go of a cancelled evacuation, it keeps the host marked as being evacuated and refuses every VM migration to it, even across the host's restart. XenMan now notices this instead of trying each VM four times: the update pauses, administrators get a mail ("attention needed"), and the update offers **Restart the coordinator's toolstack and continue**, which clears it. VMs keep running; tools connected to the pool lose their connection for about a minute.
 
 ### Changed
 - When XenServer refuses something because an object is busy, XenMan now says which one and with what (for example "host "xs-01" is busy (evacuate)") instead of "Another operation is running on the pool".
+- The audit log now also records a changed backup address and SSH port of a pool.
 
 ## [1.0.3] - 2026-11-11
 

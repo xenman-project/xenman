@@ -10,6 +10,12 @@ export interface XenHost {
   backupAddress?: string;
   sshPort?: number;
   /**
+   * The pool's hosts are behind NAT: XenMan reaches them at other addresses
+   * than the ones XenServer reports (lib/nat.ts). hosts maps a reported
+   * address to the one to connect to.
+   */
+  nat?: { enabled: boolean; hosts: Record<string, string> };
+  /**
    * The stored password could not be decrypted (it was written by another
    * installation, whose key is not here): it has to be entered again.
    */

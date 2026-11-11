@@ -49,6 +49,7 @@ export function toPublicHost(host: XenHost): XenHostPublic {
     autoConnect: host.autoConnect,
     backupAddress: host.backupAddress,
     sshPort: host.sshPort,
+    ...(host.nat ? { nat: host.nat } : {}),
     // Whether, not what: the password has to be entered again.
     ...(host.passwordUnreadable ? { passwordUnreadable: true } : {}),
   };

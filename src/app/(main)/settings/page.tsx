@@ -1,5 +1,6 @@
 "use client";
 
+import { PoolNatSettings } from "@/components/pool-nat-settings";
 import React, { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { useXen } from "@/context/xen-context";
@@ -274,6 +275,7 @@ export default function SettingsPage() {
       useSsl: host.useSsl,
       autoConnect: host.autoConnect ?? false,
       sshPort: host.sshPort ?? 22,
+      ...(host.nat ? { nat: host.nat } : {}),
     });
     setDialogOpen(true);
   }
@@ -937,6 +939,16 @@ export default function SettingsPage() {
                               }
                             />
                           </div>
+
+                          {/* Where its hosts are reached takes the stored login: once the pool is added. */}
+                          {editingHost && (
+                            <PoolNatSettings
+                              poolId={editingHost.id}
+                              poolAddress={formData.address.trim()}
+                              value={formData.nat}
+                              onChange={(nat) => setFormData((f) => ({ ...f, nat }))}
+                            />
+                          )}
                         </div>
 
                         {!editingHost && probe?.cert && (
@@ -1027,6 +1039,11 @@ export default function SettingsPage() {
                                     className="ml-2 text-[10px]"
                                   >
                                     SSL
+                                  </Badge>
+                                )}
+                                {host.nat?.enabled && (
+                                  <Badge variant="outline" className="ml-1 text-[10px]" title="Its hosts are reached at other addresses than XenServer reports">
+                                    NAT
                                   </Badge>
                                 )}
                                 {host.autoConnect && (

@@ -16,6 +16,7 @@
 
 import { xenApiCall } from "./xen-client";
 import { xenPutStream } from "./xen-tls";
+import { reachable } from "./nat";
 import { XapiTaskError, type XapiCall } from "./xen-network-actions";
 import { diskSize } from "./vm-copy";
 
@@ -170,7 +171,8 @@ export async function runImport(
 
   // UploadFile: to the SR's own host, else to the coordinator the session is on.
   const viaHost = storageHost(r, upload.srRef);
-  const address = viaHost ? str(r.hosts[viaHost]?.address) || ctx.address : ctx.address;
+  // Behind NAT: at the address that host is reached at (lib/nat.ts).
+  const address = viaHost ? reachable(ctx.poolId, str(r.hosts[viaHost]?.address)) || ctx.address : ctx.address;
   const importTask = await call<string>("task.create", ["put_import_task", address]);
   const scheme = ctx.useSsl ? "https" : "http";
   const host = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
