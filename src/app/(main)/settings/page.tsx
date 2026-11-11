@@ -140,6 +140,8 @@ export default function SettingsPage() {
     coordinator?: { address: string; cert: ProbedCertificate };
     error?: string;
   } | null>(null);
+  // Adding a pool behind NAT: the login, once checked, may read its hosts (the draft it was checked for).
+  const [natReadFor, setNatReadFor] = useState<string | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -325,6 +327,8 @@ export default function SettingsPage() {
     return "ok";
   }
 
+  const natDraftKey = `${formData.address.trim()}|${formData.port}|${formData.username}|${formData.password}|${formData.useSsl}|${probe?.cert?.fingerprint ?? ""}`;
+
   async function handleSave() {
     if (!formData.name.trim() || !formData.address.trim()) return;
 
@@ -338,6 +342,12 @@ export default function SettingsPage() {
         return;
       }
       if (formData.useSsl && (await verifyHost()) !== "ok") return;
+      // Hosts behind NAT: the checked login reads the pool's hosts first, for
+      // the addresses to be entered; the next click adds the pool.
+      if (formData.nat?.enabled && natReadFor !== natDraftKey) {
+        setNatReadFor(natDraftKey);
+        return;
+      }
       addHost(
         { ...formData, id: generateId() },
         formData.useSsl ? probe?.cert?.fingerprint : undefined,
@@ -940,10 +950,25 @@ export default function SettingsPage() {
                             />
                           </div>
 
-                          {/* Where its hosts are reached takes the stored login: once the pool is added. */}
-                          {editingHost && (
+                          {/* Where its hosts are reached: read with the stored login, or (adding) the one just checked. */}
+                          {editingHost ? (
                             <PoolNatSettings
                               poolId={editingHost.id}
+                              poolAddress={formData.address.trim()}
+                              value={formData.nat}
+                              onChange={(nat) => setFormData((f) => ({ ...f, nat }))}
+                            />
+                          ) : (
+                            <PoolNatSettings
+                              draft={{
+                                address: formData.address.trim(),
+                                port: formData.port,
+                                useSsl: formData.useSsl,
+                                username: formData.username,
+                                password: formData.password,
+                                fingerprint: probe?.cert?.fingerprint,
+                              }}
+                              ready={natReadFor === natDraftKey}
                               poolAddress={formData.address.trim()}
                               value={formData.nat}
                               onChange={(nat) => setFormData((f) => ({ ...f, nat }))}
@@ -982,7 +1007,11 @@ export default function SettingsPage() {
                           >
                             {editingHost
                               ? "Save Changes"
-                              : !formData.useSsl
+                              : formData.nat?.enabled && natReadFor !== natDraftKey && (!formData.useSsl || probe?.cert)
+                                ? formData.useSsl
+                                  ? "Compared – trust and list the hosts"
+                                  : "List the pool's hosts"
+                                : !formData.useSsl
                                 ? "Add Host"
                                 : probe?.loading
                                   ? "Checking…"

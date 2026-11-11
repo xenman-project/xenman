@@ -17,7 +17,7 @@ import { xenFetch, withPool } from "./xen-tls";
 import { CertMismatchError } from "./host-trust";
 import { learnPool } from "./host-trust-learn";
 import { describeRef } from "./ref-names";
-import { reachable } from "./nat";
+import { reachableAt } from "./nat";
 
 export interface PoolSession {
   hostId: string;
@@ -58,10 +58,11 @@ async function loginPool(hostId: string): Promise<PoolSession> {
       }
       if (err instanceof XenApiError && err.message === "HOST_IS_SLAVE" && err.data?.length) {
         // Behind NAT the member names the coordinator's own address (lib/nat.ts).
-        const coordinator = reachable(hostId, String(err.data[0]));
+        const at = reachableAt(hostId, String(err.data[0]));
+        const coordinator = at.host;
         try {
-          const session = await loginToHost(coordinator, port, useSsl, username, password);
-          return { hostId, address: coordinator, port, useSsl, session };
+          const session = await loginToHost(coordinator, at.port ?? port, useSsl, username, password);
+          return { hostId, address: coordinator, port: at.port ?? port, useSsl, session };
         } catch (e) {
           if (e instanceof CertMismatchError) refused = e;
           lastError = e;

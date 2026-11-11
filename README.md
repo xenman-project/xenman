@@ -184,7 +184,12 @@ Passwords stored by earlier versions are re-encrypted with the current key on th
 
 XenMan can manage a pool it reaches only through NAT, such as a firewall's virtual IP in front of a pool at another site. Add the pool with the address its coordinator is reached at. Everything then works except what XenServer hands out at a host's own management address: consoles, performance graphs, imports and SSH exports. XenCenter has the same limit.
 
-To make those work too, edit the pool under **Settings → Pools** and switch on **Hosts are behind NAT**. XenMan lists the pool's hosts with the address each one reports; enter the address it is reached at from XenMan (the coordinator's is filled in). Each host needs an address of its own, with ports 443 and, for SSH exports, 22 passed through. The firewall must pass TLS through unchanged: every host's certificate is checked against the pool's as before.
+To make those work too, switch on **Hosts are behind NAT** when adding the pool, or later under **Settings → Pools → Edit**. XenMan lists the pool's hosts with the address each one reports; enter where each is reached from XenMan (the coordinator's is filled in). Every host has to be reachable, since XenServer does not pass consoles on through the coordinator. Either:
+
+- each host gets an address of its own, with port 443 passed through, or
+- one address forwards a port per host to that host's port 443: enter it with the port, such as `1.2.3.4:4431`.
+
+SSH exports go to the coordinator on the pool's SSH port. The firewall must pass TLS through unchanged: every host's certificate is checked against the pool's as before.
 
 Off, which is the default, nothing changes.
 

@@ -167,7 +167,7 @@ import { grantConsole, lookupSession, registerSession, removeSession } from "@/l
 import { drainPumps, stopPump, type PumpSpec } from "@/lib/xen-event-pump";
 import { withPool } from "@/lib/xen-tls";
 import { CertMismatchError, SshKeyMismatchError, checkSshKey, knownAddresses, sshKeyFingerprint } from "@/lib/host-trust";
-import { natAddresses, reachable, reachableUrl } from "@/lib/nat";
+import { natAddresses, reachable, reachableAt, reachableUrl } from "@/lib/nat";
 import { learnPool } from "@/lib/host-trust-learn";
 
 // XenServer's self-signed certificates are not checked against a CA but
@@ -1018,7 +1018,9 @@ async function dispatch(request: NextRequest) {
               err.data.length > 0
             ) {
               // Behind NAT the member names the coordinator's own address (lib/nat.ts).
-              connectHost = reachable(hostId, err.data[0] as string);
+              const coordinatorAt = reachableAt(hostId, err.data[0] as string);
+              connectHost = coordinatorAt.host;
+              port = coordinatorAt.port ?? port;
               try {
                 session = await loginToHost(
                   connectHost,
@@ -1507,7 +1509,8 @@ async function dispatch(request: NextRequest) {
                 xapi<string>("host.get_address", ref),
               ]);
               try {
-                return { name, uuid, isCoordinator: ref === master, rrd: await fetchRrdCached(reachable(poolOfSession, address), port, useSsl, sessionRef, period, poolOfSession) };
+                const at = reachableAt(poolOfSession, address);
+                return { name, uuid, isCoordinator: ref === master, rrd: await fetchRrdCached(at.host, at.port ?? port, useSsl, sessionRef, period, poolOfSession) };
               } catch (err) {
                 throw new Error(name, { cause: err });
               }
@@ -1537,8 +1540,8 @@ async function dispatch(request: NextRequest) {
         } else {
           return NextResponse.json({ error: "Missing vmRef or hostRef" }, { status: 400 });
         }
-        const address = reachable(poolOfSession, await xapi<string>("host.get_address", target));
-        const rrd = await fetchRrdCached(address, port, useSsl, sessionRef, period, poolOfSession);
+        const at = reachableAt(poolOfSession, await xapi<string>("host.get_address", target));
+        const rrd = await fetchRrdCached(at.host, at.port ?? port, useSsl, sessionRef, period, poolOfSession);
         return NextResponse.json(perfCharts(rrd, kind, uuid, requests));
       }
 

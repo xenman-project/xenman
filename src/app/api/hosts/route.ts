@@ -5,7 +5,7 @@ import { auditRequest } from "@/lib/audit";
 import { accessibleHosts, toPublicHost } from "@/lib/pool-access";
 import { XenHost } from "@/lib/types";
 import { forgetPool, normalizeFingerprint, probeCertificate, trustCertificate } from "@/lib/host-trust";
-import { loginRefusedMessage, loginToHost, logout, XenApiError } from "@/lib/xen-client";
+import { loginRefusedMessage, loginToHost, logout, xenApiCall, XenApiError } from "@/lib/xen-client";
 import { NotConfirmedError, withPinned } from "@/lib/xen-tls";
 import { cleanNat } from "@/lib/nat";
 import { call, closePoolSession, friendlyXapiError, openPoolSession } from "@/lib/xen-updates";
@@ -69,21 +69,56 @@ export async function POST(request: NextRequest) {
       case "members": {
         // The pool's hosts as XenServer reports them, for the NAT table: which
         // address each one is to be reached at is the administrator's to say.
-        if (!hostId || !hosts.some((h) => h.id === hostId)) return NextResponse.json({ error: "Pool not found" }, { status: 404 });
-        try {
-          const s = await openPoolSession(hostId);
+        const listed = (master: string, recs: Record<string, Record<string, unknown>>) =>
+          Object.entries(recs)
+            .map(([ref, r]) => ({ name: String(r.name_label ?? ""), address: String(r.address ?? ""), coordinator: ref === master }))
+            .sort((a, b) => Number(b.coordinator) - Number(a.coordinator) || a.name.localeCompare(b.name));
+        if (hostId) {
+          if (!hosts.some((h) => h.id === hostId)) return NextResponse.json({ error: "Pool not found" }, { status: 404 });
           try {
-            const [pool] = await call<string[]>(s, "pool.get_all");
-            const master = await call<string>(s, "pool.get_master", pool);
-            const recs = await call<Record<string, Record<string, unknown>>>(s, "host.get_all_records");
-            const members = Object.entries(recs)
-              .map(([ref, r]) => ({ name: String(r.name_label ?? ""), address: String(r.address ?? ""), coordinator: ref === master }))
-              .sort((a, b) => Number(b.coordinator) - Number(a.coordinator) || a.name.localeCompare(b.name));
-            return NextResponse.json({ members });
-          } finally {
-            await closePoolSession(s);
+            const s = await openPoolSession(hostId);
+            try {
+              const [pool] = await call<string[]>(s, "pool.get_all");
+              const master = await call<string>(s, "pool.get_master", pool);
+              return NextResponse.json({ members: listed(master, await call<Record<string, Record<string, unknown>>>(s, "host.get_all_records")) });
+            } finally {
+              await closePoolSession(s);
+            }
+          } catch (err) {
+            return NextResponse.json({ error: friendlyXapiError(err) }, { status: 502 });
           }
+        }
+        // A pool being added: with the login just typed, over the certificate
+        // the administrator confirmed -- the password goes nowhere else.
+        const address = typeof body.address === "string" ? body.address.trim() : "";
+        const port = Number(body.port) || 443;
+        const useSsl = body.useSsl !== false;
+        const { username, password } = body as { username?: string; password?: string };
+        if (!ADDRESS_RE.test(address) || port < 1 || port > 65535) return NextResponse.json({ error: "Enter the host's address and port" }, { status: 400 });
+        if (useSsl && (typeof fingerprint !== "string" || !FINGERPRINT_RE.test(fingerprint))) {
+          return NextResponse.json({ error: "Confirm the host's certificate first" }, { status: 400 });
+        }
+        if (!username || !password) return NextResponse.json({ error: "Enter the user name and password" }, { status: 400 });
+        const read = async () => {
+          const session = await loginToHost(address, port, useSsl, username, password);
+          try {
+            const [pool] = await xenApiCall<string[]>(address, port, useSsl, "pool.get_all", [session]);
+            const master = await xenApiCall<string>(address, port, useSsl, "pool.get_master", [session, pool]);
+            return listed(master, await xenApiCall<Record<string, Record<string, unknown>>>(address, port, useSsl, "host.get_all_records", [session]));
+          } finally {
+            await logout(address, port, useSsl, session).catch(() => {});
+          }
+        };
+        try {
+          return NextResponse.json({ members: useSsl ? await withPinned([fingerprint!], read) : await read() });
         } catch (err) {
+          if (err instanceof XenApiError && err.message === "HOST_IS_SLAVE") {
+            return NextResponse.json({ error: "Add the pool with its coordinator's address to set where its hosts are reached" }, { status: 400 });
+          }
+          if (err instanceof XenApiError && err.message === "SESSION_AUTHENTICATION_FAILED") {
+            return NextResponse.json({ error: loginRefusedMessage(err, username) }, { status: 400 });
+          }
+          if (err instanceof NotConfirmedError) return NextResponse.json({ error: err.message }, { status: 409 });
           return NextResponse.json({ error: friendlyXapiError(err) }, { status: 502 });
         }
       }

@@ -19,13 +19,29 @@ interface Member {
 
 type Nat = NonNullable<XenHost["nat"]>;
 
+/** A pool being added: read with the login typed, over the certificate confirmed. */
+export interface NatDraft {
+  address: string;
+  port: number;
+  useSsl: boolean;
+  username: string;
+  password: string;
+  fingerprint?: string;
+}
+
 export function PoolNatSettings({
   poolId,
+  draft,
+  ready = true,
   poolAddress,
   value,
   onChange,
 }: {
-  poolId: string;
+  /** A pool already added: read with its stored login. */
+  poolId?: string;
+  draft?: NatDraft;
+  /** A draft may be read: its certificate was confirmed and its login checked. */
+  ready?: boolean;
   /** The address the pool is connected at: where its coordinator is reached. */
   poolAddress: string;
   value: Nat | undefined;
@@ -34,16 +50,24 @@ export function PoolNatSettings({
   const nat: Nat = value ?? { enabled: false, hosts: {} };
   const [members, setMembers] = useState<Member[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Read again when the pool to read changes (a draft's address or login).
+  const source = poolId ?? (draft ? `${draft.address}|${draft.port}|${draft.username}|${draft.useSsl}` : "");
+  const [readFor, setReadFor] = useState(source);
+  if (readFor !== source) {
+    setReadFor(source);
+    setMembers(null);
+    setError(null);
+  }
 
   // Asked once the switch is on: it takes a login at the pool.
   useEffect(() => {
-    if (!nat.enabled || members) return;
+    if (!nat.enabled || members || !ready || (!poolId && !draft)) return;
     let gone = false;
     (async () => {
       const res = await fetch("/api/hosts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "members", hostId: poolId }),
+        body: JSON.stringify(poolId ? { action: "members", hostId: poolId } : { action: "members", ...draft }),
       }).catch(() => null);
       const json = await res?.json().catch(() => ({}));
       if (gone) return;
@@ -63,7 +87,7 @@ export function PoolNatSettings({
       gone = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- asked once per opening; what is typed meanwhile must not ask again
-  }, [nat.enabled, members, poolId]);
+  }, [nat.enabled, members, poolId, ready, readFor]);
 
   // Hosts the setting names that the pool no longer reports are kept and shown.
   const reported = new Set((members ?? []).map((m) => m.address.toLowerCase()));
@@ -90,7 +114,14 @@ export function PoolNatSettings({
       {nat.enabled && (
         <div className="space-y-2 text-sm">
           {error && <p className="text-destructive">{error}</p>}
-          {!members && !error && (
+          {!ready && (
+            <p className="text-xs text-zinc-500">
+              {draft?.useSsl
+                ? "Its hosts are listed once the certificate is compared and the login checked."
+                : "Its hosts are listed once the login is checked."}
+            </p>
+          )}
+          {ready && !members && !error && (
             <p className="flex items-center gap-2 text-zinc-500">
               <Loader2 className="h-4 w-4 animate-spin" /> Asking the pool for its hosts
             </p>
@@ -121,7 +152,8 @@ export function PoolNatSettings({
             </div>
           )}
           <p className="text-xs text-zinc-500">
-            Left empty, a host is reached at the address it reports. Each host&apos;s certificate is checked as before.
+            An address, or an address with a port when one address forwards to several hosts (1.2.3.4:4431). Left empty, a host
+            is reached at the address it reports. Each host&apos;s certificate is checked as before.
           </p>
         </div>
       )}

@@ -23,7 +23,7 @@ import { withPinned, withPool } from "./xen-tls";
 import { loginToHost, xenApiCall } from "./xen-client";
 import { asyncCall, XapiTaskError, type XapiCall } from "./xen-network-actions";
 import { canJoinPool, type JoinVerdict } from "./pool-join-rules";
-import { reachable } from "./nat";
+import { reachable, reachableAt } from "./nat";
 
 export type MemberStepState = "pending" | "running" | "done" | "failed";
 
@@ -342,8 +342,8 @@ async function runRemove(ctx: MemberContext, job: PoolMemberJob, host: Ejectee) 
         id,
         name: host.name,
         // Behind NAT: where the pool's setting says this host is reached.
-        address: reachable(ctx.poolId, host.address),
-        port: poolEntry.port,
+        address: reachableAt(ctx.poolId, host.address).host,
+        port: reachableAt(ctx.poolId, host.address).port ?? poolEntry.port,
         useSsl: poolEntry.useSsl,
         username: poolEntry.username,
         password: poolEntry.password,
@@ -358,7 +358,7 @@ async function runRemove(ctx: MemberContext, job: PoolMemberJob, host: Ejectee) 
       const port = loadHostsFromDisk().find((h) => h.id === job.newHostId)?.port ?? ctx.port;
       await sleep(REBOOT_FIRST_MS);
       for (let i = 0; i <= REBOOT_TRIES; i++) {
-        if (await answers(reachable(ctx.poolId, host.address), port)) return;
+        if (await answers(reachable(ctx.poolId, host.address), port)) return; // its port: the new entry's
         if (i < REBOOT_TRIES) await sleep(REBOOT_EVERY_MS);
       }
       throw new Error(`Unable to reconnect to ${host.address}. Server is unavailable.`);

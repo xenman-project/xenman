@@ -7,7 +7,7 @@ section of the version it leads to.
 ## [1.0.4] - Unreleased
 
 ### Added
-- **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached (Settings → Pools → edit → **Hosts are behind NAT**). Off by default; the hosts' certificates are checked as before.
+- **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached: an address of its own, or one address with a port per host (`1.2.3.4:4431`). Switched on as **Hosts are behind NAT** when adding a pool or when editing it; off by default. The hosts' certificates are checked as before.
 
 ### Fixed
 - **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
