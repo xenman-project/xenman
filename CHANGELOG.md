@@ -4,7 +4,7 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [1.0.3] - Unreleased
+## [1.0.4] - Unreleased
 
 ### Fixed
 - **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
@@ -12,6 +12,11 @@ section of the version it leads to.
 
 ### Changed
 - When XenServer refuses something because an object is busy, XenMan now says which one and with what (for example "host "xs-01" is busy (evacuate)") instead of "Another operation is running on the pool".
+
+## [1.0.3] - 2026-11-11
+
+### Security
+- Node.js 24.22.3, a security release of Node.js (10 November 2026). XenMan 1.0.2 otherwise unchanged.
 
 ## [1.0.2] - 2026-11-11
 
