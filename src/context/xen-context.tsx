@@ -615,9 +615,9 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- connectById is stable (dispatch only)
   }, []);
 
-  /** Connects a configured entry; the caller knows it exists. */
+  /** Connects a configured entry; the caller knows it exists. Whether it worked. */
   const connectById = useCallback(
-    async (hostId: string) => {
+    async (hostId: string): Promise<boolean> => {
       dispatch({ type: "SET_CONNECTION_STATUS", hostId, status: "connecting" });
 
       // Only the host id goes over the wire. The server checks the pool grant,
@@ -651,6 +651,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
           alerts: data.alerts,
           alertTotal: data.alertTotal,
         });
+        return true;
       } catch (err) {
         dispatch({
           type: "SET_CONNECTION_STATUS",
@@ -658,8 +659,35 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
           status: "error",
           error: err instanceof Error ? err.message : "Connection failed",
         });
+        return false;
       }
     },
+    [],
+  );
+
+  /**
+   * A pool's session is gone -- XenServer restarted its toolstack, as an update
+   * does, or XenMan restarted -- while the pool still shows as connected. It is
+   * connected again as a reload would, once at once and, while the pool is still
+   * coming back, twice more. Not when it was disconnected meanwhile.
+   */
+  const reconnecting = useRef(new Set<string>());
+  const reconnectAfterSessionLoss = useCallback(
+    async (hostId: string) => {
+      if (reconnecting.current.has(hostId)) return;
+      reconnecting.current.add(hostId);
+      try {
+        for (const wait of [0, 10_000, 30_000]) {
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          const status = connectionsRef.current[hostId]?.status;
+          if (!status || status === "disconnected") return;
+          if (await connectById(hostId)) return;
+        }
+      } finally {
+        reconnecting.current.delete(hostId);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectById is stable (dispatch only); connectionsRef is a ref
     [],
   );
 
@@ -758,7 +786,15 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
           sessionRef: conn.session.sessionRef,
         }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Without the event loop (auto refresh off) this poll is what notices a
+        // session XenServer or XenMan no longer knows.
+        const failed = await res.json().catch(() => ({}));
+        if (failed.error === "SESSION_INVALID" || (res.status === 401 && /^Session expired/.test(failed.error ?? ""))) {
+          void reconnectAfterSessionLoss(hostId);
+        }
+        return;
+      }
       const data = await res.json();
       dispatch({
         type: "SET_ALERTS",
@@ -769,7 +805,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // A failed alert poll is not worth surfacing — the next tick retries.
     }
-  }, []);
+  }, [reconnectAfterSessionLoss]);
 
   const dismissAlert = useCallback(
     async (hostId: string, alertRef: string) => {
@@ -1180,9 +1216,11 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
               continue;
             }
             if (result.error === "SESSION_INVALID") {
-              // The session is gone; polling it again cannot help. Reconnecting
-              // changes connectedHostsKey, which restarts this effect.
+              // The session is gone; polling it again cannot help. Connected
+              // again, the pool changes connectedHostsKey, which restarts this
+              // effect with its new session.
               sessionOf.delete(entry.hostId);
+              void reconnectAfterSessionLoss(entry.hostId);
               continue;
             }
             // Anything else is transient: ask again next round.
@@ -1220,7 +1258,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
     })();
 
     return () => controller.abort();
-  }, [connectedHostsKey, eventPolling]);
+  }, [connectedHostsKey, eventPolling, reconnectAfterSessionLoss]);
 
   return (
     <XenContext.Provider

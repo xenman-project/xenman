@@ -574,12 +574,17 @@ async function fetchAlertsAndTasks(
   useSsl: boolean,
   sessionRef: string,
 ): Promise<{ alerts: XenAlert[]; poolTasks: XenPoolTask[] }> {
+  // A session XenServer no longer knows is passed on, not read as "no alerts":
+  // the client connects again on it, and the bell is not emptied meanwhile.
+  const sessionGone = (err: unknown) => err instanceof XenApiError && err.message === "SESSION_INVALID";
   const [msgRaw, taskRaw] = await Promise.all([
     messageGetAllRecords(host, port, useSsl, sessionRef).catch((err) => {
+      if (sessionGone(err)) throw err;
       console.error(`[xen-events] message.get_all_records failed: ${err instanceof Error ? err.message : err}`);
       return {} as Record<string, Record<string, unknown>>;
     }),
     taskGetAllRecords(host, port, useSsl, sessionRef).catch((err) => {
+      if (sessionGone(err)) throw err;
       console.error(`[xen-events] task.get_all_records failed: ${err instanceof Error ? err.message : err}`);
       return {} as Record<string, Record<string, unknown>>;
     }),
