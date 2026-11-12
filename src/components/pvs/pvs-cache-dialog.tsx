@@ -119,7 +119,8 @@ export function PvsCacheDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Only the body scrolls: with many servers, Cancel and Save stay in view. */}
+      {/* Only the list of servers scrolls: with many servers, the site above it and the notes,
+          buttons and Cancel/Save below it stay in view. */}
       <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>PVS-Accelerator configuration{poolName ? ` – ${poolName}` : ""}</DialogTitle>
@@ -129,7 +130,8 @@ export function PvsCacheDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="-mx-1 min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-1 text-sm">
+        {/* On a very low window the whole body scrolls after all; the list keeps a few rows. */}
+        <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1 py-1 text-sm">
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1 space-y-1.5">
               <Label>Site</Label>
@@ -165,12 +167,14 @@ export function PvsCacheDialog({
             </p>
           )}
 
-          <div className="space-y-2">
-            <p className="font-medium">Cache configuration</p>
+          <p className="-mb-2 font-medium">Cache configuration</p>
+          <div className="min-h-32 overflow-y-auto pr-1">
             <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_7rem] items-center gap-x-3 gap-y-2">
-              <span className="text-xs text-muted-foreground">Server</span>
-              <span className="text-xs text-muted-foreground">Cache storage</span>
-              <span className="text-xs text-muted-foreground">Cache size</span>
+              {["Server", "Cache storage", "Cache size"].map((h) => (
+                <span key={h} className="sticky top-0 z-10 bg-background pb-1 text-xs text-muted-foreground">
+                  {h}
+                </span>
+              ))}
               {rows.map((r) => {
                 const c = choice[r.host] ?? { storage: "none", sizeGb: "10" };
                 const opt = r.options.find((o) => o.value === c.storage);
@@ -213,6 +217,8 @@ export function PvsCacheDialog({
                 );
               })}
             </div>
+          </div>
+          <div className="-mt-2 space-y-2">
             {anyInUse && <p className="text-xs text-muted-foreground">The cache storage cannot be changed on servers where it is in use.</p>}
             {anyEditable && (
               <p className="text-xs text-muted-foreground">
