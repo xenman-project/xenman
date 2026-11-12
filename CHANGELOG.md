@@ -4,15 +4,11 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [Unreleased]
-
-### Added
-- **PVS-Accelerator**, as in XenCenter: a PVS tab per pool lists the VMs with their PVS site and read caching status, switches read caching on and off for selected VMs, and configures each PVS site's cache per server (memory or a storage repository, and its size), adds and removes sites and shows a site's PVS servers. A running VM's overview shows its PVS-Accelerator status. Needs the PVS-Accelerator licence; switching on and off is for operators and administrators, configuring for administrators. Unlike XenCenter, XenMan names the VMs it skips (no network interface 0, or already on), and setting a server to "Not configured" only removes its cache instead of putting one in memory.
-
 ## [1.0.4] - Unreleased
 
 ### Added
 - **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached: an address of its own, or one address with a port per host (`1.2.3.4:4431`). Switched on as **Hosts are behind NAT** when adding a pool or when editing it; off by default. The hosts' certificates are checked as before.
+- **PVS-Accelerator**, as in XenCenter: a PVS tab per pool lists the VMs with their PVS site and read caching status, switches read caching on and off for selected VMs, and configures each PVS site's cache per server (memory or a storage repository, and its size), adds and removes sites and shows a site's PVS servers. A running VM's overview shows its PVS-Accelerator status. Needs the PVS-Accelerator licence; switching on and off is for operators and administrators, configuring for administrators. Unlike XenCenter, XenMan names the VMs it skips (no network interface 0, or already on), and setting a server to "Not configured" only removes its cache instead of putting one in memory.
 
 ### Fixed
 - **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
