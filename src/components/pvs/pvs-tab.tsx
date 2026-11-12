@@ -4,7 +4,7 @@
 // and whether read caching is on, its site and status; operators switch it on
 // and off per VM, administrators configure the sites' cache storage.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { HardDriveDownload, Loader2, Power, PowerOff, Settings2, XCircle } from "lucide-react";
 import type { HostConnection } from "@/lib/types";
 import type { PvsOverview } from "@/lib/xen-pvs";
@@ -39,6 +39,8 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
   const [data, setData] = useState<PvsOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // The row a Shift+click range starts from: the last one clicked without Shift.
+  const anchor = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "info"; text: string } | null>(null);
   const [enableOpen, setEnableOpen] = useState(false);
@@ -106,13 +108,39 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
   }
 
   const allSelected = data.vms.length > 0 && data.vms.every((v) => selected.has(v.ref));
-  const toggle = (ref: string) =>
+  /** The VMs from the anchor to this one, in the order shown. */
+  const rangeTo = (ref: string): string[] => {
+    const refs = data.vms.map((v) => v.ref);
+    const to = refs.indexOf(ref);
+    const from = anchor.current ? refs.indexOf(anchor.current) : -1;
+    if (from < 0) return [ref];
+    return refs.slice(Math.min(from, to), Math.max(from, to) + 1);
+  };
+  /**
+   * As in XenCenter's lists: a click selects that VM only, Ctrl (Cmd) adds or
+   * removes it, Shift selects every VM from the last one clicked to it, and
+   * Ctrl+Shift adds that range. A checkbox works as Ctrl, with Shift as
+   * Ctrl+Shift.
+   */
+  const pick = (ref: string, e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }, fromCheckbox = false) => {
+    const add = fromCheckbox || e.ctrlKey || e.metaKey;
+    if (e.shiftKey) {
+      const range = rangeTo(ref);
+      setSelected((s) => new Set([...(add ? s : []), ...range]));
+      return;
+    }
+    anchor.current = ref;
+    if (!add) {
+      setSelected(new Set([ref]));
+      return;
+    }
     setSelected((s) => {
       const n = new Set(s);
       if (n.has(ref)) n.delete(ref);
       else n.add(ref);
       return n;
     });
+  };
 
   return (
     <div className="space-y-4">
@@ -171,9 +199,11 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
               <Loader2 className="h-4 w-4 animate-spin" /> Working…
             </p>
           )}
-          <div className="overflow-x-auto">
+          {/* The list scrolls in itself, as in XenCenter, so the buttons above stay in view; the column
+              heads stay too (the table's own wrapper must not scroll, or they would stick to it). */}
+          <div className="max-h-[max(16rem,calc(100dvh-26rem))] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)]">
                 <TableRow>
                   {canAct && available && (
                     <TableHead className="w-8">
@@ -193,10 +223,23 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
               </TableHeader>
               <TableBody>
                 {data.vms.map((v) => (
-                  <TableRow key={v.ref} className={selected.has(v.ref) ? "bg-muted/50" : ""}>
+                  <TableRow
+                    key={v.ref}
+                    className={`${canAct && available ? "cursor-pointer select-none" : ""} ${selected.has(v.ref) ? "bg-muted/50" : ""}`}
+                    onClick={canAct && available ? (e) => pick(v.ref, e) : undefined}
+                  >
                     {canAct && available && (
                       <TableCell>
-                        <input type="checkbox" aria-label={`Select ${v.name}`} checked={selected.has(v.ref)} onChange={() => toggle(v.ref)} />
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${v.name}`}
+                          checked={selected.has(v.ref)}
+                          readOnly
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            pick(v.ref, e, true);
+                          }}
+                        />
                       </TableCell>
                     )}
                     <TableCell className="font-medium">{v.name}</TableCell>
