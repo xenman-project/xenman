@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useXen } from "@/context/xen-context";
 import { useAuth } from "@/context/auth-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -274,7 +274,13 @@ function AddSRDialog({
     }
   }
 
-  const iscsiCall = (body: Record<string, unknown>) => apiCallWithField(conn, body);
+  // The same function for as long as the dialog lives, so the iSCSI part need not render
+  // again on every event of the pool (conn changes with each); it reads the newest conn.
+  const connRef = useRef(conn);
+  useEffect(() => {
+    connRef.current = conn;
+  });
+  const iscsiCall = useCallback((body: Record<string, unknown>) => apiCallWithField(connRef.current, body), []);
 
   /** iSCSI, step 1: what is on the LUN (SR.probe); the answer decides what is offered. */
   async function probeIscsi() {

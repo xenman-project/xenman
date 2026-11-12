@@ -6,6 +6,7 @@
 // typed. Then, on Create, what is on the LUN (IscsiLunDialog): reattach the SR
 // found there, or format the LUN.
 
+import { memo } from "react";
 import { Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -101,7 +102,17 @@ export function iscsiReady(s: IscsiState): boolean {
   return !!lun && !lun.inUse && !s.busy;
 }
 
-export function IscsiTargetFields({ state, setState, call }: { state: IscsiState; setState: (f: (s: IscsiState) => IscsiState) => void; call: Call }) {
+// Kept from rendering again on every event of the pool: an open list would be
+// placed again each time (see the lists below).
+export const IscsiTargetFields = memo(function IscsiTargetFields({
+  state,
+  setState,
+  call,
+}: {
+  state: IscsiState;
+  setState: (f: (s: IscsiState) => IscsiState) => void;
+  call: Call;
+}) {
   const s = state;
   // Host or CHAP changed: what was scanned is not valid any more (LVMoISCSI's ...Changed handlers).
   const edit = (patch: Partial<IscsiState>) => setState((x) => ({ ...x, ...patch, iqns: null, iqn: "", luns: null, lun: "", error: null }));
@@ -193,7 +204,9 @@ export function IscsiTargetFields({ state, setState, call }: { state: IscsiState
           <SelectTrigger>
             <SelectValue placeholder="Select target IQN" />
           </SelectTrigger>
-          <SelectContent>
+          {/* A list below the field: Radix's item-aligned list is placed again, and scrolled back
+              to the top, whenever the dialog renders -- with a long list, before anything can be chosen. */}
+          <SelectContent position="popper">
             {(s.iqns ?? []).map((q, i) => (
               <SelectItem key={i} value={String(i)}>
                 {q.label}
@@ -211,7 +224,7 @@ export function IscsiTargetFields({ state, setState, call }: { state: IscsiState
           <SelectTrigger>
             <SelectValue placeholder="Select target LUN" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper">
             {(s.luns ?? []).map((l, i) => (
               <SelectItem key={i} value={String(i)}>
                 {l.label}
@@ -225,7 +238,7 @@ export function IscsiTargetFields({ state, setState, call }: { state: IscsiState
       {s.error && s.error.field === null && <p className="text-xs text-red-500">{s.error.text}</p>}
     </div>
   );
-}
+});
 
 /** Util.DiskSizeString, for the SR found on a LUN. */
 function size(bytes: number): string {
