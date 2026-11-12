@@ -4,25 +4,19 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [Unreleased]
-
-### Added
-- **iSCSI: scan the target**, as XenCenter's New Storage wizard does (#4): **Scan Target Host** lists the target's IQNs, and choosing one lists its LUNs, so neither has to be typed. Before anything is written, XenMan looks at what is on the LUN and asks, as XenCenter: **Reattach** the SR found there (a known detached SR gets its connections back; one from elsewhere is introduced to the pool), or **Format** the LUN for a new SR. A LUN an SR of the pool already uses is refused. The description is made from target, IQN and LUN unless switched off.
-
-### Changed
-- A new iSCSI SR keeps its CHAP password as a XenServer secret, as XenCenter does, instead of in plain text in the SR's settings.
-
 ## [1.0.4] - Unreleased
 
 ### Added
 - **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached: an address of its own, or one address with a port per host (`1.2.3.4:4431`). Switched on as **Hosts are behind NAT** when adding a pool or when editing it; off by default. The hosts' certificates are checked as before.
 - **PVS-Accelerator**, as in XenCenter: a PVS tab per pool lists the VMs with their PVS site and read caching status, switches read caching on and off for selected VMs, and configures each PVS site's cache per server (memory or a storage repository, and its size), adds and removes sites and shows a site's PVS servers. A running VM's overview shows its PVS-Accelerator status. Needs the PVS-Accelerator licence; switching on and off is for operators and administrators, configuring for administrators. Unlike XenCenter, XenMan names the VMs it skips (no network interface 0, or already on), and setting a server to "Not configured" only removes its cache instead of putting one in memory.
+- **iSCSI: scan the target**, as XenCenter's New Storage wizard does (#4): **Scan Target Host** lists the target's IQNs, and choosing one lists its LUNs, so neither has to be typed. Before anything is written, XenMan looks at what is on the LUN and asks, as XenCenter: **Reattach** the SR found there (a known detached SR gets its connections back; one from elsewhere is introduced to the pool), or **Format** the LUN for a new SR. A LUN an SR of the pool already uses is refused. The description is made from target, IQN and LUN unless switched off.
 
 ### Fixed
 - **Updates: an evacuation XenServer does not finish.** XenServer's host evacuation can hang with the host already empty (seen at 97 % for an hour after one migration failed). XenMan no longer waits out the full hour: once the host has been empty for 5 minutes, it cancels the evacuation and goes on.
 - **Updates: a host XenServer keeps blocked.** When XenServer does not let go of a cancelled evacuation, it keeps the host marked as being evacuated and refuses every VM migration to it, even across the host's restart. XenMan now notices this instead of trying each VM four times: the update pauses, administrators get a mail ("attention needed"), and the update offers **Restart the coordinator's toolstack and continue**, which clears it. VMs keep running; tools connected to the pool lose their connection for about a minute.
 
 ### Changed
+- A new iSCSI SR keeps its CHAP password as a XenServer secret, as XenCenter does, instead of in plain text in the SR's settings.
 - When XenServer refuses something because an object is busy, XenMan now says which one and with what (for example "host "xs-01" is busy (evacuate)") instead of "Another operation is running on the pool".
 - The audit log now also records a changed backup address and SSH port of a pool.
 
