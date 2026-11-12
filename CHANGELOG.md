@@ -4,6 +4,11 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
+## [Unreleased]
+
+### Added
+- **PVS-Accelerator**, as in XenCenter: a PVS tab per pool lists the VMs with their PVS site and read caching status, switches read caching on and off for selected VMs, and configures each PVS site's cache per server (memory or a storage repository, and its size), adds and removes sites and shows a site's PVS servers. A running VM's overview shows its PVS-Accelerator status. Needs the PVS-Accelerator licence; switching on and off is for operators and administrators, configuring for administrators. Unlike XenCenter, XenMan names the VMs it skips (no network interface 0, or already on), and setting a server to "Not configured" only removes its cache instead of putting one in memory.
+
 ## [1.0.4] - Unreleased
 
 ### Added

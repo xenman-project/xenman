@@ -66,9 +66,10 @@ import {
 import { GpuTab } from "@/components/gpu/gpu-tab";
 import { MemoryTab } from "@/components/memory/memory-tab";
 import { AddServerDialog } from "@/components/pool/add-server-dialog";
-import { ServerCog } from "lucide-react";
+import { HardDriveDownload, ServerCog } from "lucide-react";
 import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { WlbTab } from "@/components/wlb-tab";
+import { PvsTab } from "@/components/pvs/pvs-tab";
 import { HostNetworking } from "@/components/networking/host-networking";
 import { PerfCharts } from "@/components/perf-charts";
 import { takePendingPoolTab } from "@/components/xen-updates-overview";
@@ -768,6 +769,10 @@ export function HostDetail() {
               <Scale className="h-4 w-4" />
               WLB
             </TabsTrigger>
+            <TabsTrigger value="pvs" className="gap-2">
+              <HardDriveDownload className="h-4 w-4" />
+              PVS
+            </TabsTrigger>
           </TabsList>
 
           {/* ── Overview Tab ── */}
@@ -1242,6 +1247,9 @@ export function HostDetail() {
 
           <TabsContent value="wlb">
             <WlbTab key={hostId} conn={conn} poolName={pool?.nameLabel ?? ""} isAdmin={isAdmin} />
+          </TabsContent>
+          <TabsContent value="pvs">
+            <PvsTab key={hostId} conn={conn} poolName={pool?.nameLabel ?? ""} isAdmin={isAdmin} canAct={canAct} />
           </TabsContent>
         </Tabs>
       </div>

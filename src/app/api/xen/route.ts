@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { applyDisable, applyEnable, applyRemoveSite, applySite, buildPvsOverview, loadPvsRecords, planDisable, planEnable, planRemoveSite, planSite, pvsError, pvsStatusText } from "@/lib/xen-pvs";
 import { Client as SshClient } from "ssh2";
 import { authenticateRequest } from "@/lib/api-auth";
 import { loadHostsFromDisk } from "@/lib/host-storage";
@@ -822,6 +823,7 @@ const READ_ONLY_ACTIONS = new Set([
   "pool_networks", "task_status", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
   "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status",
+  "pvs_overview", "pvs_vm_status",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -858,6 +860,8 @@ const ADMIN_ONLY_ACTIONS = new Set([
   "license_assign", "license_release",
   // GPUs: placement policy, allowed vGPU types.
   "gpu_set_placement", "gpu_set_enabled_types",
+  // PVS-Accelerator: a site's cache storage, adding and removing sites (lib/xen-pvs.ts).
+  "pvs_site_save", "pvs_site_remove",
   // Recording a data source costs the host memory and disk for its RRD.
   "rrd_record",
 ]);
@@ -3048,6 +3052,72 @@ async function dispatch(request: NextRequest) {
         }
       }
 
+      case "pvs_vm_status": {
+        // One VM's proxy status, for its overview (GeneralTabPage); null without PVS-Accelerator.
+        if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
+        const proxies = await xenApiCall<Record<string, Record<string, unknown>>>(host, port, useSsl, "PVS_proxy.get_all_records", [sessionRef]).catch(() => ({}));
+        if (!Object.keys(proxies).length) return NextResponse.json({ status: null });
+        const vifs = await xenApiCall<string[]>(host, port, useSsl, "VM.get_VIFs", [sessionRef, vmRef]);
+        const proxy = Object.values(proxies).find((p) => vifs.includes(String(p.VIF)));
+        return NextResponse.json({ status: proxy ? pvsStatusText(proxy.status) : null });
+      }
+
+      case "pvs_overview":
+      case "pvs_enable":
+      case "pvs_disable":
+      case "pvs_site_save":
+      case "pvs_site_remove": {
+        // XenCenter's PVS tab and PVS-Accelerator configuration (lib/xen-pvs.ts).
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        const records = await loadPvsRecords(call);
+        rememberRefNames(Object.entries(records.sites).map(([ref, s]) => ({ ref, nameLabel: String(s.name_label ?? ""), uuid: String(s.uuid ?? "") })));
+        if (action === "pvs_overview") return NextResponse.json(buildPvsOverview(records));
+        const failedText = (failed: string[]) => (failed.length ? `Not done: ${failed.join(", ")}` : null);
+        try {
+          if (action === "pvs_enable" || action === "pvs_disable") {
+            const vms = Array.isArray(body.vms) && body.vms.length > 0 && body.vms.length <= 500 && body.vms.every(isXenRef) ? (body.vms as string[]) : null;
+            if (!vms) return NextResponse.json({ error: "No VMs given" }, { status: 400 });
+            if (action === "pvs_enable") {
+              if (!isXenRef(body.site)) return NextResponse.json({ error: "Choose a PVS site" }, { status: 400 });
+              const plan = planEnable(records, vms, body.site);
+              if ("problem" in plan) return NextResponse.json({ error: plan.problem }, { status: 409 });
+              const failed = await applyEnable(call, plan, body.site);
+              return NextResponse.json({ enabled: plan.create.length - failed.length, skipped: plan.skipped, error: failedText(failed) }, { status: failed.length ? 502 : 200 });
+            }
+            const plan = planDisable(records, vms);
+            if ("problem" in plan) return NextResponse.json({ error: plan.problem }, { status: 409 });
+            const failed = await applyDisable(call, plan.destroy);
+            return NextResponse.json({ disabled: plan.destroy.length - failed.length, error: failedText(failed) }, { status: failed.length ? 502 : 200 });
+          }
+          if (action === "pvs_site_save") {
+            const hostsIn = body.hosts && typeof body.hosts === "object" && !Array.isArray(body.hosts) ? (body.hosts as Record<string, { storage?: unknown; sizeGb?: unknown }>) : null;
+            if (!hostsIn || typeof body.name !== "string" || (body.site !== undefined && !isXenRef(body.site))) {
+              return NextResponse.json({ error: "Invalid PVS site settings" }, { status: 400 });
+            }
+            const hostsWanted: Record<string, { storage: string; sizeGb: number }> = {};
+            for (const [h, v] of Object.entries(hostsIn)) {
+              const storage = v?.storage;
+              if (!isXenRef(h) || typeof storage !== "string" || !(storage === "none" || storage === "memory" || isXenRef(storage))) {
+                return NextResponse.json({ error: "Invalid PVS site settings" }, { status: 400 });
+              }
+              hostsWanted[h] = { storage, sizeGb: Number(v.sizeGb) };
+            }
+            const plan = planSite(records, { site: body.site as string | undefined, name: body.name, hosts: hostsWanted });
+            if ("problem" in plan) return NextResponse.json({ error: plan.problem }, { status: 409 });
+            const site = await applySite(call, plan);
+            return NextResponse.json({ success: true, site });
+          }
+          if (!isXenRef(body.site)) return NextResponse.json({ error: "No PVS site given" }, { status: 400 });
+          const plan = planRemoveSite(records, body.site);
+          if ("problem" in plan) return NextResponse.json({ error: plan.problem }, { status: 409 });
+          await applyRemoveSite(call, body.site, plan.servers);
+          return NextResponse.json({ success: true });
+        } catch (err) {
+          if (err instanceof XenApiError || err instanceof XapiTaskError) return NextResponse.json({ error: pvsError(err) }, { status: 502 });
+          throw err;
+        }
+      }
+
       case "vm_gpu":
       case "vm_gpu_set": {
         // XenCenter's VM Properties → GPU (lib/vm-gpu.ts).
@@ -3488,6 +3558,10 @@ interface XenActionFields {
   pgpuRefs?: unknown;
   enable?: unknown;
   disable?: unknown;
+  // PVS-Accelerator.
+  vms?: unknown;
+  site?: unknown;
+  hosts?: unknown;
 }
 
 function auditCategory(action: string): AuditCategory {
@@ -3613,6 +3687,21 @@ function auditDetail(f: XenActionFields): string | undefined {
   if (f.action === "license_assign") parts.push(`license server=${String(f.licenseServer)}`, "edition=cloud");
   if (f.action === "license_release") parts.push("edition=trial");
   if (f.action === "gpu_set_placement") parts.push(`placement=${String(f.algorithm)}`);
+  if (f.action === "pvs_enable" || f.action === "pvs_disable") {
+    const vms = Array.isArray(f.vms) ? (f.vms as unknown[]).map((v) => describeRef("VM", String(v)) ?? String(v)) : [];
+    parts.push(`PVS-Accelerator ${f.action === "pvs_enable" ? "on" : "off"} for ${vms.join(", ")}`);
+    if (f.action === "pvs_enable" && typeof f.site === "string") parts.push(`site ${describeRef("PVS site", f.site) ?? f.site}`);
+  }
+  if (f.action === "pvs_site_save") {
+    const site = typeof f.site === "string" ? describeRef("PVS site", f.site) ?? f.site : "new PVS site";
+    parts.push(`${site}, name "${String(f.name ?? "")}"`);
+    const hosts = f.hosts && typeof f.hosts === "object" ? (f.hosts as Record<string, { storage?: unknown; sizeGb?: unknown }>) : {};
+    for (const [h, v] of Object.entries(hosts)) {
+      const storage = v?.storage === "none" ? "not configured" : v?.storage === "memory" ? "memory" : describeRef("SR", String(v?.storage)) ?? String(v?.storage);
+      parts.push(`${describeRef("host", h) ?? h}: ${storage}${v?.storage === "none" ? "" : ` ${String(v?.sizeGb)} GB`}`);
+    }
+  }
+  if (f.action === "pvs_site_remove" && typeof f.site === "string") parts.push(`${describeRef("PVS site", f.site) ?? f.site} removed`);
   if (f.action === "gpu_set_enabled_types") {
     const n = (v: unknown) => (Array.isArray(v) ? v.length : 0);
     parts.push(`GPUs=${n(f.pgpuRefs)}`, `allowed+=${n(f.enable)}`, `allowed-=${n(f.disable)}`);

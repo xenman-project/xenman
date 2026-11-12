@@ -300,6 +300,34 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
       .finally(() => setNicsLoading(false));
   }, [vmRef, nicsLoaded, conn]);
 
+  // GeneralTabPage: a running VM with PVS-Accelerator shows its proxy's status.
+  const [pvsStatus, setPvsStatus] = React.useState<string | null>(null);
+  const running = vm?.powerState === "Running";
+  React.useEffect(() => {
+    if (!running || !conn.session) return;
+    let gone = false;
+    fetch("/api/xen", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "pvs_vm_status",
+        host: conn.connectedVia || conn.host.address,
+        port: conn.host.port,
+        useSsl: conn.host.useSsl,
+        sessionRef: conn.session.sessionRef,
+        vmRef,
+      }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!gone) setPvsStatus(typeof data?.status === "string" ? data.status : null);
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
+  }, [vmRef, running, conn]);
+
   React.useEffect(() => {
     if (guestMetricsLoaded === vmRef) return;
     fetch("/api/xen", {
@@ -937,6 +965,14 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                           Uptime
                         </TableCell>
                         <TableCell>{formatUptime(vm.startTime)}</TableCell>
+                      </TableRow>
+                    )}
+                    {running && pvsStatus && (
+                      <TableRow>
+                        <TableCell className="font-medium text-zinc-500">
+                          PVS-Accelerator status
+                        </TableCell>
+                        <TableCell>{pvsStatus}</TableCell>
                       </TableRow>
                     )}
                     {guestOsVersion && (
