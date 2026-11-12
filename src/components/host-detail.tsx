@@ -32,6 +32,16 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  EMPTY_ISCSI,
+  IscsiLunDialog,
+  IscsiTargetFields,
+  iscsiDescription,
+  iscsiReady,
+  iscsiRequest,
+  type IscsiState,
+} from "@/components/storage/iscsi-target-fields";
+import type { ProbeOutcome } from "@/lib/sr-iscsi";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -122,6 +132,24 @@ interface ConnInfo {
   connectedVia?: string;
 }
 
+/** As apiCall, but the error keeps the field the server names (the iSCSI scans: host, chap, lun). */
+async function apiCallWithField(conn: ConnInfo, body: Record<string, unknown>) {
+  const res = await fetch("/api/xen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...body,
+      host: conn.connectedVia || conn.host.address,
+      port: conn.host.port,
+      useSsl: conn.host.useSsl,
+      sessionRef: conn.session!.sessionRef,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || "API call failed"), { field: data.field ?? null });
+  return data as Record<string, unknown>;
+}
+
 async function apiCall(conn: ConnInfo, body: Record<string, unknown>) {
   const res = await fetch("/api/xen", {
     method: "POST",
@@ -142,6 +170,9 @@ async function apiCall(conn: ConnInfo, body: Record<string, unknown>) {
 }
 
 type SRType = "nfs" | "lvmoiscsi" | "lvm" | "ext";
+
+/** XenCenter's name for a new iSCSI SR (New Storage wizard, Name page). */
+const ISCSI_DEFAULT_NAME = "iSCSI virtual disk storage";
 
 const SR_TYPE_LABELS: Record<SRType, string> = {
   nfs: "NFS",
@@ -174,13 +205,12 @@ function AddSRDialog({
   const [nfsPath, setNfsPath] = useState("");
   const [nfsVersion, setNfsVersion] = useState("3");
 
-  // iSCSI fields
-  const [iscsiTarget, setIscsiTarget] = useState("");
-  const [iscsiTargetIQN, setIscsiTargetIQN] = useState("");
-  const [iscsiSCSIid, setIscsiSCSIid] = useState("");
-  const [iscsiPort, setIscsiPort] = useState("3260");
-  const [iscsiChapUser, setIscsiChapUser] = useState("");
-  const [iscsiChapPassword, setIscsiChapPassword] = useState("");
+  // iSCSI: scanned as XenCenter does (components/storage/iscsi-target-fields.tsx).
+  const [iscsi, setIscsi] = useState<IscsiState>(EMPTY_ISCSI);
+  /** What is on the LUN chosen, asked before anything is written. */
+  const [probe, setProbe] = useState<ProbeOutcome | null>(null);
+  /** XenCenter's "Autogenerate description based on SR settings", on by default. */
+  const [autoDescription, setAutoDescription] = useState(true);
 
   // Local (LVM/EXT) fields
   const [localDevice, setLocalDevice] = useState("");
@@ -198,17 +228,14 @@ function AddSRDialog({
       setSrType("nfs");
       setName("");
       setDescription("");
+      setAutoDescription(true);
       setShared(true);
       setHostRef(hosts.length > 0 ? hosts[0].ref : "");
       setNfsServer("");
       setNfsPath("");
       setNfsVersion("3");
-      setIscsiTarget("");
-      setIscsiTargetIQN("");
-      setIscsiSCSIid("");
-      setIscsiPort("3260");
-      setIscsiChapUser("");
-      setIscsiChapPassword("");
+      setIscsi(EMPTY_ISCSI);
+      setProbe(null);
       setLocalDevice("");
       setError("");
       setCreating(false);
@@ -227,19 +254,8 @@ function AddSRDialog({
         if (nfsVersion && nfsVersion !== "3") cfg.nfsversion = nfsVersion;
         return cfg;
       }
-      case "lvmoiscsi": {
-        const cfg: Record<string, string> = {
-          target: iscsiTarget,
-          targetIQN: iscsiTargetIQN,
-          SCSIid: iscsiSCSIid,
-        };
-        if (iscsiPort && iscsiPort !== "3260") cfg.port = iscsiPort;
-        if (iscsiChapUser) {
-          cfg.chapuser = iscsiChapUser;
-          cfg.chappassword = iscsiChapPassword;
-        }
-        return cfg;
-      }
+      case "lvmoiscsi":
+        return {};
       case "lvm":
       case "ext":
         return { device: localDevice };
@@ -247,17 +263,63 @@ function AddSRDialog({
   }
 
   function isValid(): boolean {
-    if (!name.trim() || !hostRef) return false;
+    if (!name.trim()) return false;
+    // iSCSI goes to the pool coordinator, as XenCenter's wizard does; the others to the host chosen.
+    if (srType === "lvmoiscsi") return iscsiReady(iscsi);
+    if (!hostRef) return false;
     switch (srType) {
       case "nfs": return !!(nfsServer.trim() && nfsPath.trim());
-      case "lvmoiscsi": return !!(iscsiTarget.trim() && iscsiTargetIQN.trim() && iscsiSCSIid.trim());
       case "lvm":
       case "ext": return !!localDevice.trim();
     }
   }
 
+  const iscsiCall = (body: Record<string, unknown>) => apiCallWithField(conn, body);
+
+  /** iSCSI, step 1: what is on the LUN (SR.probe); the answer decides what is offered. */
+  async function probeIscsi() {
+    const req = iscsiRequest(iscsi);
+    if (!req) return;
+    setCreating(true);
+    setError("");
+    try {
+      setProbe((await iscsiCall({ action: "sr_iscsi_probe", ...req })) as unknown as ProbeOutcome);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to look at the LUN");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  /** iSCSI, step 2: format the LUN for a new SR, or reattach the SR found on it. */
+  async function finishIscsi(mode: "format" | "reattach") {
+    const req = iscsiRequest(iscsi);
+    if (!req || !probe) return;
+    setCreating(true);
+    setError("");
+    try {
+      await iscsiCall({
+        action: "sr_iscsi_create",
+        ...req,
+        mode,
+        ...(mode === "reattach" ? { uuid: probe.found?.uuid } : { confirm: true }),
+        nameLabel: name.trim(),
+        nameDescription: autoDescription ? iscsiDescription(iscsi) : description.trim(),
+      });
+      setProbe(null);
+      onCreated();
+      onOpenChange(false);
+    } catch (err) {
+      setProbe(null);
+      setError(err instanceof Error ? err.message : "Failed to create SR");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function handleCreate() {
     if (!isValid()) return;
+    if (srType === "lvmoiscsi") return probeIscsi();
     setCreating(true);
     setError("");
     try {
@@ -290,7 +352,7 @@ function AddSRDialog({
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
-          <div className="grid gap-2">
+          <div className={srType === "lvmoiscsi" ? "hidden" : "grid gap-2"}>
             <Label>Host</Label>
             <Select value={hostRef} onValueChange={setHostRef}>
               <SelectTrigger>
@@ -308,7 +370,14 @@ function AddSRDialog({
 
           <div className="grid gap-2">
             <Label>Type</Label>
-            <Select value={srType} onValueChange={(v) => setSrType(v as SRType)}>
+            <Select
+              value={srType}
+              onValueChange={(v) => {
+                setSrType(v as SRType);
+                // XenCenter's name for a new iSCSI SR, when none is typed yet.
+                if (v === "lvmoiscsi" && !name.trim()) setName(ISCSI_DEFAULT_NAME);
+              }}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -325,9 +394,22 @@ function AddSRDialog({
             <Input id="sr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Storage" />
           </div>
 
+          {/* XenCenter's Name page for iSCSI: the description made from the SR's settings, unless switched off. */}
+          {srType === "lvmoiscsi" && (
+            <div className="flex items-center gap-2">
+              <Switch id="sr-autodesc" checked={autoDescription} onCheckedChange={setAutoDescription} />
+              <Label htmlFor="sr-autodesc" className="cursor-pointer">
+                Autogenerate description based on SR settings (e.g., IP address, LUN etc.)
+              </Label>
+            </div>
+          )}
           <div className="grid gap-2">
             <Label htmlFor="sr-desc">Description</Label>
-            <Input id="sr-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+            {srType === "lvmoiscsi" && autoDescription ? (
+              <Input id="sr-desc" disabled value={iscsiDescription(iscsi)} placeholder="Made from the target, IQN and LUN" />
+            ) : (
+              <Input id="sr-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" />
+            )}
           </div>
 
           {/* NFS fields */}
@@ -359,39 +441,8 @@ function AddSRDialog({
             </>
           )}
 
-          {/* iSCSI fields */}
-          {srType === "lvmoiscsi" && (
-            <>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="iscsi-target">Target Host</Label>
-                  <Input id="iscsi-target" value={iscsiTarget} onChange={(e) => setIscsiTarget(e.target.value)} placeholder="192.168.1.100" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="iscsi-port">Port</Label>
-                  <Input id="iscsi-port" value={iscsiPort} onChange={(e) => setIscsiPort(e.target.value)} placeholder="3260" />
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="iscsi-iqn">Target IQN</Label>
-                <Input id="iscsi-iqn" value={iscsiTargetIQN} onChange={(e) => setIscsiTargetIQN(e.target.value)} placeholder="iqn.2001-04.com.example:storage" />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="iscsi-scsi">SCSI ID</Label>
-                <Input id="iscsi-scsi" value={iscsiSCSIid} onChange={(e) => setIscsiSCSIid(e.target.value)} placeholder="360000..." />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="iscsi-chap-user">CHAP User</Label>
-                  <Input id="iscsi-chap-user" value={iscsiChapUser} onChange={(e) => setIscsiChapUser(e.target.value)} placeholder="Optional" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="iscsi-chap-pw">CHAP Password</Label>
-                  <Input id="iscsi-chap-pw" type="password" value={iscsiChapPassword} onChange={(e) => setIscsiChapPassword(e.target.value)} placeholder="Optional" />
-                </div>
-              </div>
-            </>
-          )}
+          {/* iSCSI: scan the target, choose IQN and LUN (XenCenter's New Storage wizard) */}
+          {srType === "lvmoiscsi" && <IscsiTargetFields state={iscsi} setState={setIscsi} call={iscsiCall} />}
 
           {/* Local LVM/EXT fields */}
           {(srType === "lvm" || srType === "ext") && (
@@ -401,13 +452,22 @@ function AddSRDialog({
             </div>
           )}
 
-          <div className="flex items-center justify-between rounded-lg border p-3">
+          {/* An iSCSI SR is always shared, as XenCenter makes it. */}
+          <div className={srType === "lvmoiscsi" ? "hidden" : "flex items-center justify-between rounded-lg border p-3"}>
             <Label htmlFor="sr-shared" className="cursor-pointer">Shared (accessible from all hosts)</Label>
             <Switch id="sr-shared" checked={shared} onCheckedChange={setShared} />
           </div>
 
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
+
+        <IscsiLunDialog
+          probe={probe}
+          busy={creating}
+          onReattach={() => finishIscsi("reattach")}
+          onFormat={() => finishIscsi("format")}
+          onCancel={() => setProbe(null)}
+        />
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={creating}>Cancel</Button>

@@ -134,6 +134,10 @@ import { buildCopyPlan, convertBlockedReason, convertToTemplate, copyBlockedReas
 import { finishImport, ImportRefused, importTargets, loadImportRecords } from "@/lib/vm-import";
 import { applyVmGpus, buildVmGpuPage, changeProblem, loadVmGpuRecords } from "@/lib/vm-gpu";
 import { buildSrStates, loadSrRecords, runSrCommand, SrRefused, type SrCommand } from "@/lib/sr-manage";
+import {
+  createIscsiSr, IscsiError, ISCSI_PORT, loadPoolSrView, lunInUse, probeLun, reattachIscsiSr, scanIqns, scanLuns,
+  type IscsiLunConfig, type IscsiTarget,
+} from "@/lib/sr-iscsi";
 import { getMaintenanceJob, runningFor, startMaintenance } from "@/lib/host-maintenance-job";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
@@ -846,6 +850,8 @@ const ADMIN_ONLY_ACTIONS = new Set([
   "pool_join", "pool_set_name_label", "sr_create",
   // XenCenter's SR menu: repair, detach, forget, destroy, set as default, reclaim space.
   "sr_command",
+  // A new iSCSI SR as XenCenter's wizard makes it: scan the target, look at the LUN, create or reattach.
+  "sr_iscsi_scan_iqns", "sr_iscsi_scan_luns", "sr_iscsi_probe", "sr_iscsi_create",
   "pool_wlb_connect", "pool_wlb_disconnect", "pool_wlb_set_enabled", "pool_wlb_configure", "pool_wlb_apply",
   // A pool's networks: what XenCenter's Networking tab changes.
   "network_create", "network_update", "network_destroy", "network_configure_ip", "network_management_change",
@@ -3024,6 +3030,71 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ srs: buildSrStates(await loadSrRecords(call)) });
       }
 
+      case "sr_iscsi_scan_iqns":
+      case "sr_iscsi_scan_luns":
+      case "sr_iscsi_probe":
+      case "sr_iscsi_create": {
+        // XenCenter's New Storage wizard for iSCSI (lib/sr-iscsi.ts). Target and
+        // CHAP come from the form; nothing of it is logged but target, IQN and LUN.
+        const text = (v: unknown, max = 255) =>
+          typeof v === "string" && v.trim().length <= max && !/[\x00-\x1f]/.test(v) ? v.trim() : "";
+        const portNo = body.iscsiPort === undefined || body.iscsiPort === "" ? ISCSI_PORT : Number(body.iscsiPort);
+        const target: IscsiTarget = {
+          target: text(body.target),
+          port: portNo,
+          ...(text(body.chapuser) ? { chapuser: text(body.chapuser), chappassword: typeof body.chappassword === "string" ? body.chappassword : "" } : {}),
+        };
+        if (!target.target) return NextResponse.json({ error: "Enter the target host", field: "host" }, { status: 400 });
+        if (!Number.isInteger(portNo) || portNo < 1 || portNo > 65535) {
+          return NextResponse.json({ error: "The port must be a number from 1 to 65535", field: "host" }, { status: 400 });
+        }
+        const call = <T,>(method: string, params: unknown[]) => xenApiCall<T>(host, port, useSsl, method, [sessionRef, ...params]);
+        try {
+          const view = await loadPoolSrView(call);
+          if (action === "sr_iscsi_scan_iqns") {
+            return NextResponse.json({ iqns: await scanIqns(call, view.coordinator, target) });
+          }
+          const targetIQN = text(body.targetIQN, 1024);
+          if (!targetIQN) return NextResponse.json({ error: "Choose a target IQN" }, { status: 400 });
+          if (action === "sr_iscsi_scan_luns") {
+            const luns = await scanLuns(call, view.coordinator, { ...target, targetIQN });
+            return NextResponse.json({ luns: luns.map((l) => ({ ...l, inUse: lunInUse(view, l.scsiId) })) });
+          }
+          const lun: IscsiLunConfig = { ...target, targetIQN, scsiId: text(body.scsiId, 1024), lunSerial: text(body.lunSerial, 1024) };
+          if (!lun.scsiId && !lun.lunSerial) return NextResponse.json({ error: "Choose a target LUN", field: "lun" }, { status: 400 });
+          const used = lunInUse(view, lun.scsiId ?? "");
+          if (used) return NextResponse.json({ error: used, field: "lun" }, { status: 409 });
+          // Looked at again at creation too: what is on the LUN decides what may be done.
+          const probe = await probeLun(call, view, lun);
+          if (action === "sr_iscsi_probe") return NextResponse.json(probe);
+
+          const name = text(body.nameLabel);
+          if (!name) return NextResponse.json({ error: "Enter a name for the SR" }, { status: 400 });
+          const sr = { name, description: typeof body.nameDescription === "string" ? body.nameDescription.trim() : "" };
+          const where = `${target.target}:${target.port} ${targetIQN} LUN ${lun.scsiId || lun.lunSerial}`;
+          if (body.mode === "reattach") {
+            if (!probe.found || probe.found.uuid !== body.uuid) {
+              return NextResponse.json({ error: "That SR is no longer on the LUN: scan again", field: "lun" }, { status: 409 });
+            }
+            const srRef = await reattachIscsiSr(call, view, lun, probe.found.uuid, sr);
+            rememberRefNames([{ ref: srRef, nameLabel: name }]);
+            return NextResponse.json({ srRef, auditNote: `reattached SR ${probe.found.uuid} from ${where}` });
+          }
+          if (body.mode !== "format") return NextResponse.json({ error: "Format or reattach?" }, { status: 400 });
+          if (body.confirm !== true) return NextResponse.json({ error: "Not confirmed", needsConfirm: true }, { status: 409 });
+          if (probe.inUse) return NextResponse.json({ error: probe.inUse, field: "lun" }, { status: 409 });
+          const srRef = await createIscsiSr(call, view, lun, sr);
+          rememberRefNames([{ ref: srRef, nameLabel: name }]);
+          return NextResponse.json({
+            srRef,
+            auditNote: `formatted ${where} as a new SR${probe.found ? `, over SR ${probe.found.uuid}` : ""}${target.chapuser ? " (CHAP password as a secret)" : ""}`,
+          });
+        } catch (err) {
+          if (err instanceof IscsiError) return NextResponse.json({ error: err.message, field: err.field }, { status: 409 });
+          throw err;
+        }
+      }
+
       case "sr_command": {
         const srRef = body.srRef;
         const command = body.command as SrCommand;
@@ -3485,15 +3556,21 @@ async function dispatch(request: NextRequest) {
 // vm_console is read-only in the XAPI sense and anything but routine in the
 // operational one: it hands out the address of a VM's keyboard. It is issued
 // once, when somebody opens a console, so it is not chatty either.
-const AUDIT_EXEMPT_ACTIONS = new Set(
-  [...READ_ONLY_ACTIONS].filter(
+const AUDIT_EXEMPT_ACTIONS = new Set([
+  ...[...READ_ONLY_ACTIONS].filter(
     (a) => a !== "connect" && a !== "disconnect" && a !== "vm_console",
   ),
-);
+  // Scanning an iSCSI target changes nothing; only a failed scan is worth a line.
+  "sr_iscsi_scan_iqns", "sr_iscsi_scan_luns", "sr_iscsi_probe",
+]);
 
 /** The subset of the request body that identifies what an action touched. */
 interface XenActionFields {
   action?: string;
+  // A new iSCSI SR: where (the CHAP password deliberately not listed).
+  target?: unknown;
+  targetIQN?: unknown;
+  scsiId?: unknown;
   sessionRef?: string;
   host?: string;
   hostId?: string;
@@ -3617,6 +3694,12 @@ function auditTarget(f: XenActionFields): string | undefined {
 
 function auditDetail(f: XenActionFields): string | undefined {
   const parts: string[] = [];
+  if (f.action?.startsWith("sr_iscsi_")) {
+    if (typeof f.target === "string") parts.push(`target=${f.target}`);
+    if (typeof f.targetIQN === "string") parts.push(`iqn=${f.targetIQN}`);
+    if (typeof f.scsiId === "string" && f.scsiId) parts.push(`lun=${f.scsiId}`);
+    if (typeof f.mode === "string") parts.push(`mode=${f.mode}`);
+  }
   if (f.powerAction) parts.push(`powerAction=${f.powerAction}`);
   if (f.targetHostRef) {
     parts.push(`to ${describeRef("host", f.targetHostRef) ?? f.targetHostRef}`);
@@ -3782,7 +3865,18 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const detail = [auditDetail(fields), failureReason]
+  // What a new iSCSI SR became (formatted or reattached) only the action knows; it says so in its answer.
+  let note: string | undefined;
+  if (outcome === "success" && action === "sr_iscsi_create") {
+    try {
+      const answer = (await response.clone().json()) as { auditNote?: unknown };
+      if (typeof answer.auditNote === "string") note = answer.auditNote;
+    } catch {
+      // no note
+    }
+  }
+
+  const detail = [auditDetail(fields), note, failureReason]
     .filter(Boolean)
     .join(" — ");
 

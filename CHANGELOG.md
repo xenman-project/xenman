@@ -4,6 +4,14 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
+## [Unreleased]
+
+### Added
+- **iSCSI: scan the target**, as XenCenter's New Storage wizard does (#4): **Scan Target Host** lists the target's IQNs, and choosing one lists its LUNs, so neither has to be typed. Before anything is written, XenMan looks at what is on the LUN and asks, as XenCenter: **Reattach** the SR found there (a known detached SR gets its connections back; one from elsewhere is introduced to the pool), or **Format** the LUN for a new SR. A LUN an SR of the pool already uses is refused. The description is made from target, IQN and LUN unless switched off.
+
+### Changed
+- A new iSCSI SR keeps its CHAP password as a XenServer secret, as XenCenter does, instead of in plain text in the SR's settings.
+
 ## [1.0.4] - Unreleased
 
 ### Added
