@@ -1,6 +1,6 @@
 {
   "name": "xenman",
-  "version": "1.0.4-rc.3",
+  "version": "1.0.4-rc.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
