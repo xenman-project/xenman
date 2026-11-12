@@ -4,7 +4,7 @@
 // and whether read caching is on, its site and status; operators switch it on
 // and off per VM, administrators configure the sites' cache storage.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { HardDriveDownload, Loader2, Power, PowerOff, Settings2, XCircle } from "lucide-react";
 import type { HostConnection } from "@/lib/types";
 import type { PvsOverview } from "@/lib/xen-pvs";
@@ -17,6 +17,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { PvsCacheDialog } from "./pvs-cache-dialog";
 
 const RELOAD_MS = 30_000;
+/** The VM list is never made lower than this, however small the window. */
+const MIN_LIST_PX = 256;
 
 export async function pvsXen(conn: HostConnection, body: Record<string, unknown>) {
   const res = await fetch("/api/xen", {
@@ -46,6 +48,35 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
   const [enableOpen, setEnableOpen] = useState(false);
   const [site, setSite] = useState("");
   const [configOpen, setConfigOpen] = useState(false);
+  const listBox = useRef<HTMLDivElement>(null);
+
+  // The VM list gets the height that is left down to the bottom of the window, as
+  // XenCenter's fills the page: only the list scrolls, never the page. Measured,
+  // since what sits above it (header, tabs, messages) differs between screens.
+  useLayoutEffect(() => {
+    const fit = () => {
+      const box = listBox.current;
+      if (!box || !box.offsetParent) return;
+      let scroller: HTMLElement | null = box.parentElement;
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+      const page = !scroller || scroller === document.body || scroller === document.documentElement;
+      const outer = page ? (document.scrollingElement as HTMLElement) : scroller!;
+      const keepBox = box.scrollTop;
+      const keepOuter = outer.scrollTop;
+      box.style.maxHeight = "none";
+      const top = page ? 0 : outer.getBoundingClientRect().top;
+      const height = page ? window.innerHeight : outer.clientHeight;
+      const r = box.getBoundingClientRect();
+      const above = r.top - top + outer.scrollTop;
+      const below = Math.max(0, outer.scrollHeight - (r.bottom - top + outer.scrollTop));
+      box.style.maxHeight = `${Math.max(MIN_LIST_PX, Math.floor(height - above - below))}px`;
+      box.scrollTop = keepBox;
+      outer.scrollTop = keepOuter;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  });
 
   const load = useCallback(async () => {
     try {
@@ -201,7 +232,7 @@ export function PvsTab({ conn, poolName, isAdmin, canAct }: { conn: HostConnecti
           )}
           {/* The list scrolls in itself, as in XenCenter, so the buttons above stay in view; the column
               heads stay too (the table's own wrapper must not scroll, or they would stick to it). */}
-          <div className="max-h-[max(16rem,calc(100dvh-26rem))] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
+          <div ref={listBox} className="max-h-[32rem] overflow-auto rounded-md border [&_[data-slot=table-container]]:overflow-visible">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card shadow-[inset_0_-1px_0_var(--border)]">
                 <TableRow>
