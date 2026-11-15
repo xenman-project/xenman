@@ -254,7 +254,6 @@ export function TotpSettingsCard({ username }: { username?: string }) {
               Two-factor authentication
               {state && (state.enabled ? <Badge variant="secondary">On</Badge> : <Badge variant="outline">Off</Badge>)}
             </CardTitle>
-            <CardDescription>A code from an authenticator app after the password, at every sign-in</CardDescription>
           </div>
         </div>
       </CardHeader>
