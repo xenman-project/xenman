@@ -50,11 +50,21 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/change-password", request.url));
   }
 
+  // The two-factor policy covers this user, who has not set it up: only that.
+  if (payload.tfe && !TWOFACTOR_SETUP_PATHS.includes(pathname)) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Two-factor sign-in has to be set up first" }, { status: 403 });
+    }
+    return NextResponse.redirect(new URL("/setup-2fa", request.url));
+  }
+
   return NextResponse.next();
 }
 
 /** What a session that must change its password first may reach. */
 const PASSWORD_CHANGE_PATHS = ["/change-password", "/api/auth/change-password", "/api/auth/me"];
+/** What a session that must set up two-factor sign-in first may reach. */
+const TWOFACTOR_SETUP_PATHS = ["/setup-2fa", "/api/auth/totp", "/api/auth/me"];
 
 function denyAccess(request: NextRequest) {
   if (request.nextUrl.pathname.startsWith("/api/")) {

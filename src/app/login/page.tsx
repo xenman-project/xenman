@@ -29,6 +29,11 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Two-factor sign-in: the code after the password (api/auth/login/totp).
+  const [totpMode, setTotpMode] = useState(false);
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [code, setCode] = useState("");
+
   // Forgot password
   const [forgotMode, setForgotMode] = useState(false);
   const [forgotInput, setForgotInput] = useState("");
@@ -55,12 +60,56 @@ export default function LoginPage() {
       }
 
       const data = await res.json().catch(() => ({}));
-      if (data.mustChangePassword) {
-        router.push("/change-password");
+      if (data.totpRequired) {
+        setTotpMode(true);
+        setUseRecovery(false);
+        setCode("");
         return;
       }
-      router.push("/");
-      router.refresh();
+      signedIn(data);
+    } catch {
+      setError("Network error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function signedIn(data: { mustChangePassword?: boolean; recoveryLeft?: number }) {
+    if (data.mustChangePassword) {
+      router.push("/change-password");
+      return;
+    }
+    // Few recovery codes left: said once, on the way in.
+    if (typeof data.recoveryLeft === "number" && data.recoveryLeft <= 3) {
+      window.alert(
+        `You signed in with a recovery code. ${data.recoveryLeft} left -- make new ones under Settings > Account.`,
+      );
+    }
+    router.push("/");
+    router.refresh();
+  }
+
+  async function handleCode(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth/login/totp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(useRecovery ? { recoveryCode: code } : { code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Sign-in failed");
+        setCode("");
+        if (data.restart) {
+          setTotpMode(false);
+          setPassword("");
+        }
+        return;
+      }
+      signedIn(data);
     } catch {
       setError("Network error");
     } finally {
@@ -90,6 +139,72 @@ export default function LoginPage() {
     } finally {
       setForgotLoading(false);
     }
+  }
+
+  if (totpMode) {
+    return (
+      <AuthShell>
+        <div className="w-full max-w-[19rem]">
+          <AuthHeading
+            title="Two-factor sign-in"
+            subtitle={
+              useRecovery
+                ? "Enter one of your recovery codes. Each one works once."
+                : "Enter the code from your authenticator app."
+            }
+          />
+          <form onSubmit={handleCode} className="grid gap-4">
+            <div className="grid gap-1.5">
+              <Label htmlFor="totp-code" className={LABEL}>
+                {useRecovery ? "Recovery code" : "Authentication code"}
+              </Label>
+              <Input
+                id="totp-code"
+                key={useRecovery ? "recovery" : "code"}
+                value={code}
+                onChange={(e) => setCode(useRecovery ? e.target.value : e.target.value.replace(/\D/g, "").slice(0, 6))}
+                className={`${FIELD} font-mono tracking-widest`}
+                inputMode={useRecovery ? "text" : "numeric"}
+                autoComplete="one-time-code"
+                placeholder={useRecovery ? "xxxx-xxxx" : "123456"}
+                autoFocus
+              />
+            </div>
+            {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+            <Button
+              type="submit"
+              disabled={loading || (useRecovery ? code.trim().length < 8 : code.length !== 6)}
+              className={`mt-1 ${SUBMIT}`}
+            >
+              {loading ? "Checking..." : "Verify"}
+            </Button>
+            <button
+              type="button"
+              className={LINK}
+              onClick={() => {
+                setUseRecovery(!useRecovery);
+                setCode("");
+                setError("");
+              }}
+            >
+              {useRecovery ? "Use the code from the app" : "Use a recovery code"}
+            </button>
+            <button
+              type="button"
+              className={LINK}
+              onClick={() => {
+                setTotpMode(false);
+                setPassword("");
+                setCode("");
+                setError("");
+              }}
+            >
+              Back to sign in
+            </button>
+          </form>
+        </div>
+      </AuthShell>
+    );
   }
 
   if (forgotMode) {

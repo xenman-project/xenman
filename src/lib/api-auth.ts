@@ -31,6 +31,14 @@ export function requireRole(
       ),
     };
   }
+  if (payload.tfe) {
+    return {
+      error: NextResponse.json(
+        { error: "Two-factor sign-in has to be set up first" },
+        { status: 403 },
+      ),
+    };
+  }
   if (!allowedRoles.includes(payload.role)) {
     return {
       error: NextResponse.json(

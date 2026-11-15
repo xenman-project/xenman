@@ -51,7 +51,7 @@ export type AuditInput = Omit<AuditEntry, "ts">;
  * for the one uncontrolled source: upstream error messages.
  */
 const SECRET_PATTERN =
-  /("?(?:password|passwd|pwd|secret|passphrase|token|sessionRef|inviteToken|resetToken)"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
+  /("?(?:password|passwd|pwd|secret|passphrase|token|sessionRef|inviteToken|resetToken|recoveryCodes?|totp|code)"?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)/gi;
 
 export function redactSecrets(text: string): string {
   return text.replace(SECRET_PATTERN, (_match, key: string) => `${key}"***"`);

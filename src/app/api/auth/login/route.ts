@@ -9,6 +9,7 @@ import { SESSION_SECONDS, setAuthCookie, viaHttps } from "@/lib/auth-cookie";
 import { startLoginSession } from "@/lib/login-sessions";
 import { auditRequest, clientIp } from "@/lib/audit";
 import { loginBlocked, loginFailed, loginSucceeded, waitText } from "@/lib/login-guard";
+import { PENDING_COOKIE, PENDING_SECONDS, signPending } from "@/lib/login-pending";
 
 function tooMany(waitMs: number) {
   return NextResponse.json(
@@ -69,10 +70,19 @@ export async function POST(request: NextRequest) {
         { status: 401 },
       );
     }
-    loginSucceeded(ip, String(username));
-
     // The default password: everything else stays closed until it is changed.
     const changeFirst = mustChangePassword(user, password);
+
+    // Two-factor sign-in: no session yet, only the step for the code
+    // (api/auth/login/totp). The failures counted so far stay: a known password
+    // must not reset the count while codes are guessed.
+    if (user.totp) {
+      const response = NextResponse.json({ totpRequired: true });
+      setAuthCookie(request, response, signPending(user.username, changeFirst), PENDING_SECONDS, PENDING_COOKIE);
+      return response;
+    }
+
+    loginSucceeded(ip, String(username));
     const token = signToken(user.username, user.role, startLoginSession(user.username, SESSION_SECONDS), changeFirst);
 
     const isHttps = viaHttps(request);

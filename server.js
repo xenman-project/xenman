@@ -151,7 +151,12 @@ function signedInUser(token) {
   const users = readJsonCached(path.join(DATA_DIR, "users.json"));
   const user = Array.isArray(users) && users.find((u) => u && same(u.username, payload.sub));
   if (!user || !user.passwordHash) return null;
-  return { sub: user.username, role: user.role || "admin", pwc: Boolean(payload.pwc || user.mustChangePassword) };
+  // As lib/twofactor-policy.ts: covered by the two-factor policy and not set up yet.
+  const policy = readJsonCached(path.join(DATA_DIR, "twofactor.json"));
+  const role = user.role || "admin";
+  const required = policy && (policy.require === "all" || (policy.require === "admins" && role === "admin"));
+  const tfe = Boolean(required && !user.totp);
+  return { sub: user.username, role, pwc: Boolean(payload.pwc || user.mustChangePassword), tfe };
 }
 
 function getTokenFromCookies(cookieHeader) {
@@ -305,8 +310,9 @@ function createUpgradeHandler(wss, transportOk) {
       }
       const token = getTokenFromCookies(req.headers.cookie);
       const payload = token ? signedInUser(token) : null;
-      // pwc: still on the default password, which has to be changed first.
-      if (!payload || payload.pwc) {
+      // pwc: still on the default password, which has to be changed first;
+      // tfe: two-factor sign-in has to be set up first.
+      if (!payload || payload.pwc || payload.tfe) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;

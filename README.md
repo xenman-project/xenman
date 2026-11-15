@@ -18,7 +18,7 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Updates** — host updates host by host: VMs moved away and back, restarts as XenServer asks, Workload Balancing paused meanwhile; a mail at the end, and one when an update needs an administrator
 - **Licensing & WLB** — License Manager, Workload Balancing
 - **Monitoring** — performance graphs, alerts, events and an audit log; syslog forwarding
-- **Users & security** — Admin / Operator / Viewer roles, invitations and password reset by mail, sign-out everywhere, inactivity sign-out; HTTPS only
+- **Users & security** — Admin / Operator / Viewer roles, invitations and password reset by mail, two-factor sign-in with an authenticator app (optionally required for administrators or everyone), sign-out everywhere, inactivity sign-out; HTTPS only
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
 
@@ -111,7 +111,7 @@ Import it with `xe vm-import filename=xenman-appliance-<tag>.xva` or in XenCente
 | | |
 |---|---|
 | Web | `https://<address>/` — login `admin` / `admin`, a new password is required first |
-| Console | `root` / `xenman` — a password change is forced at first login; then a menu for network, SSH, restarts and resetting an administrator's password |
+| Console | `root` / `xenman` — a password change is forced at first login; then a menu for network, SSH, restarts and resetting an administrator's password or two-factor sign-in |
 | Network | DHCP or static, set under Settings → Appliance → Network (applied on probation, so a typo cannot lock you out) |
 | Data | `/var/lib/xenman` |
 

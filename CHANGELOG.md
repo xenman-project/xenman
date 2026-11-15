@@ -4,6 +4,11 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
+## [Unreleased]
+
+### Added
+- **Two-factor sign-in** with an authenticator app (#5): under Settings > Account each user can turn on a code from Microsoft or Google Authenticator, 1Password and the like (TOTP), set up with a QR code drawn by XenMan itself. Ten recovery codes, each good once, cover a lost phone. Under Settings > Security an administrator can require it for administrators or for everyone; whoever it covers and has not set it up is asked to at the next sign-in, and can do nothing else until then. An administrator can reset a user's two-factor sign-in (Users), and on the appliance the console menu can turn it off for an administrator. Wrong codes count like wrong passwords; a code is good once; the key is stored encrypted, the recovery codes only as hashes. A password reset by mail leaves it on.
+
 ## [1.0.4] - Unreleased
 
 ### Added

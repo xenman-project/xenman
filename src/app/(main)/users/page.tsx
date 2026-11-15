@@ -79,6 +79,8 @@ interface UserRecord {
   invited?: boolean;
   /** Host ids (one per pool) this user may access. Admins ignore this. */
   pools?: string[];
+  /** Signs in with a code from an authenticator app. */
+  totpEnabled?: boolean;
 }
 
 /** Pools an admin can hand out, from /api/hosts. */
@@ -151,6 +153,9 @@ export default function UsersPage() {
 
   // Delete confirmation
   const [deleteUsername, setDeleteUsername] = useState<string | null>(null);
+  /** Whose two-factor sign-in to reset (a lost phone), asked first. */
+  const [resetTotpUser, setResetTotpUser] = useState<string | null>(null);
+  const [resetTotpLoading, setResetTotpLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Redirect non-admins
@@ -245,6 +250,29 @@ export default function UsersPage() {
       setError("Failed to resend invitation");
     } finally {
       setResendLoading(null);
+    }
+  }
+
+  /** Two-factor sign-in off for a user who lost the phone; their sign-ins end. */
+  async function handleResetTotp() {
+    if (!resetTotpUser) return;
+    setResetTotpLoading(true);
+    try {
+      const res = await fetch(`/api/auth/users/${encodeURIComponent(resetTotpUser)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resetTotp: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to reset two-factor sign-in");
+      }
+      fetchUsers();
+    } catch {
+      setError("Failed to reset two-factor sign-in");
+    } finally {
+      setResetTotpLoading(false);
+      setResetTotpUser(null);
     }
   }
 
@@ -509,6 +537,12 @@ export default function UsersPage() {
                                 Active
                               </Badge>
                             )}
+                            {user.totpEnabled && (
+                              <Badge variant="outline" className="ml-1.5" title="Signs in with a code from an authenticator app">
+                                <ShieldCheck className="mr-1 h-3 w-3" />
+                                2FA
+                              </Badge>
+                            )}
                           </TableCell>
                           <TableCell>
                             <DropdownMenu>
@@ -553,6 +587,12 @@ export default function UsersPage() {
                                   >
                                     <KeyRound className="mr-2 h-4 w-4" />
                                     Reset Password
+                                  </DropdownMenuItem>
+                                )}
+                                {user.totpEnabled && (
+                                  <DropdownMenuItem onClick={() => setResetTotpUser(user.username)}>
+                                    <ShieldCheck className="mr-2 h-4 w-4" />
+                                    Reset 2FA
                                   </DropdownMenuItem>
                                 )}
                                 <DropdownMenuItem
@@ -904,6 +944,25 @@ export default function UsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Reset two-factor sign-in */}
+      <AlertDialog open={resetTotpUser !== null} onOpenChange={(open) => !open && setResetTotpUser(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset two-factor sign-in</AlertDialogTitle>
+            <AlertDialogDescription>
+              <strong>{resetTotpUser}</strong> then signs in with the password alone and can set up two-factor sign-in
+              again -- for a lost or replaced phone. Their recovery codes stop working and every sign-in of theirs ends.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleResetTotp} disabled={resetTotpLoading}>
+              {resetTotpLoading ? "Resetting..." : "Reset 2FA"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Confirmation */}
       <AlertDialog

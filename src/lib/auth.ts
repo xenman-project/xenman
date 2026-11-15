@@ -6,6 +6,9 @@ import jwt from "jsonwebtoken";
 import { writeFileAtomic } from "./atomic-write";
 import { loginSessionValid } from "./login-sessions";
 import { passwordProblem } from "./password-policy";
+import { seal, unseal } from "./secret-box";
+import { matchTotp, newRecoveryCodes, newTotpSecret, normalizeRecoveryCode } from "./totp";
+import { readTwoFactorPolicy, twoFactorRequiredFor } from "./twofactor-policy";
 
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -49,6 +52,16 @@ export interface StoredUser {
   resetTokenExpiry?: string;
   /** Set for the admin/admin account created on first start: changed before anything else. */
   mustChangePassword?: boolean;
+  /**
+   * Two-factor sign-in (lib/totp.ts): the authenticator secret, sealed with
+   * lib/secret-box.ts, and the last time step a code was taken for -- a code
+   * is good once.
+   */
+  totp?: { secret: string; enabledAt: string; lastStep: number };
+  /** A secret shown for setting up, not confirmed with a code yet (sealed). */
+  totpSetup?: string;
+  /** The recovery codes, bcrypt hashes; each one is removed when used. */
+  recoveryCodes?: string[];
 }
 
 /**
@@ -60,6 +73,11 @@ export interface TokenPayload {
   role: UserRole;
   /** The password has to be changed before anything else is allowed. */
   pwc?: boolean;
+  /**
+   * The two-factor policy covers this user, who has not set it up yet: setting
+   * it up is all that is allowed (lib/twofactor-policy.ts).
+   */
+  tfe?: boolean;
   /** The sign-in (lib/login-sessions.ts): ended by signing out, a new password, or the account's removal. */
   sid: string;
 }
@@ -242,7 +260,8 @@ export function verifyToken(token: string): TokenPayload | null {
     const user = usersForCheck().find((u) => u.username.toLowerCase() === payload.sub!.toLowerCase());
     if (!user || !user.passwordHash) return null;
     const pwc = Boolean(payload.pwc || user.mustChangePassword);
-    return { sub: user.username, role: user.role, sid: payload.sid, ...(pwc ? { pwc: true } : {}) };
+    const tfe = !user.totp && twoFactorRequiredFor(user.role, readTwoFactorPolicy());
+    return { sub: user.username, role: user.role, sid: payload.sid, ...(pwc ? { pwc: true } : {}), ...(tfe ? { tfe: true } : {}) };
   } catch {
     return null;
   }
@@ -289,10 +308,15 @@ export function getUserRole(username: string): UserRole | null {
   return user?.role ?? null;
 }
 
-export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry"> & { invited?: boolean })[] {
-  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, ...rest }) => ({
+export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry" | "totp" | "totpSetup" | "recoveryCodes"> & {
+  invited?: boolean;
+  totpEnabled?: boolean;
+})[] {
+  // Neither the secret nor the recovery codes' hashes leave this file: whether it is on, nothing more.
+  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, totp, totpSetup: _setup, recoveryCodes: _codes, ...rest }) => ({
     ...rest,
     ...((!passwordHash && inviteToken) ? { invited: true } : {}),
+    ...(totp ? { totpEnabled: true } : {}),
   }));
 }
 
@@ -479,6 +503,114 @@ export function acceptResetToken(token: string, password: string): { success: bo
   dropPasswordLinks(user);
   saveUsers(users);
   return { success: true, username: user.username };
+}
+
+// ── Two-factor sign-in (lib/totp.ts) ───────────────────────────────────
+
+function findUser(users: StoredUser[], username: string): StoredUser | undefined {
+  return users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+}
+
+export interface TotpState {
+  enabled: boolean;
+  recoveryLeft: number;
+  /** The two-factor policy covers this user. */
+  required: boolean;
+}
+
+export function totpState(username: string): TotpState | null {
+  const user = findUser(loadUsers(), username);
+  if (!user) return null;
+  return {
+    enabled: Boolean(user.totp),
+    recoveryLeft: user.recoveryCodes?.length ?? 0,
+    required: twoFactorRequiredFor(user.role, readTwoFactorPolicy()),
+  };
+}
+
+/** A new secret to set up with, kept until confirmed with a code; it replaces one not confirmed. */
+export function startTotpSetup(username: string): { success: boolean; secret?: string; error?: string } {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user) return { success: false, error: "User not found" };
+  if (user.totp) return { success: false, error: "Two-factor sign-in is already on" };
+  const secret = newTotpSecret();
+  user.totpSetup = seal(secret);
+  saveUsers(users);
+  return { success: true, secret };
+}
+
+function hashRecoveryCodes(codes: string[]): string[] {
+  return codes.map((c) => bcrypt.hashSync(c, BCRYPT_ROUNDS));
+}
+
+/** The code from the app confirms the secret: two-factor sign-in is on, and the recovery codes are made. */
+export function confirmTotpSetup(username: string, code: string): { success: boolean; recoveryCodes?: string[]; error?: string } {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user || !user.totpSetup) return { success: false, error: "Set up two-factor sign-in first" };
+  const secret = unseal(user.totpSetup);
+  const step = matchTotp(secret, code);
+  if (step === null) return { success: false, error: "The code is not right. Check the time on the phone and try the next one." };
+  const recoveryCodes = newRecoveryCodes();
+  user.totp = { secret: user.totpSetup, enabledAt: new Date().toISOString(), lastStep: step };
+  user.recoveryCodes = hashRecoveryCodes(recoveryCodes);
+  delete user.totpSetup;
+  saveUsers(users);
+  return { success: true, recoveryCodes };
+}
+
+/** A code from the app, good once: the step it belongs to is remembered. */
+export function checkUserTotp(username: string, code: string): boolean {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user?.totp) return false;
+  const step = matchTotp(unseal(user.totp.secret), code, user.totp.lastStep);
+  if (step === null) return false;
+  user.totp.lastStep = step;
+  saveUsers(users);
+  return true;
+}
+
+/** A recovery code, used up; how many are left, or null when it is not one of them. */
+export function consumeRecoveryCode(username: string, code: string): number | null {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user?.totp || !user.recoveryCodes?.length) return null;
+  const typed = normalizeRecoveryCode(code);
+  if (!/^[a-z0-9]{4}-[a-z0-9]{4}$/.test(typed)) return null;
+  const i = user.recoveryCodes.findIndex((h) => bcrypt.compareSync(typed, h));
+  if (i < 0) return null;
+  user.recoveryCodes.splice(i, 1);
+  saveUsers(users);
+  return user.recoveryCodes.length;
+}
+
+export function regenerateRecoveryCodes(username: string): { success: boolean; recoveryCodes?: string[]; error?: string } {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user?.totp) return { success: false, error: "Two-factor sign-in is not on" };
+  const recoveryCodes = newRecoveryCodes();
+  user.recoveryCodes = hashRecoveryCodes(recoveryCodes);
+  saveUsers(users);
+  return { success: true, recoveryCodes };
+}
+
+export function passwordMatches(username: string, password: string): boolean {
+  const user = findUser(loadUsers(), username);
+  return Boolean(user?.passwordHash && bcrypt.compareSync(String(password ?? ""), user.passwordHash));
+}
+
+/** Two-factor sign-in off: by the user (who proved password and code) or reset by an administrator. */
+export function removeTotp(username: string): { success: boolean; error?: string } {
+  const users = loadUsers();
+  const user = findUser(users, username);
+  if (!user) return { success: false, error: "User not found" };
+  delete user.totp;
+  delete user.totpSetup;
+  delete user.recoveryCodes;
+  saveUsers(users);
+  return { success: true };
 }
 
 // The stored XenServer and mail passwords are encrypted in lib/secret-box.ts,

@@ -50,6 +50,7 @@ import { NetworkSettings } from "@/components/network-settings";
 import { AccessSettings } from "@/components/access-settings";
 import { TlsCertificate } from "@/components/tls-certificate";
 import { InactivitySettings } from "@/components/inactivity-settings";
+import { TotpSettingsCard, TwoFactorPolicyCard } from "@/components/totp-settings";
 import {
   Plus,
   Server,
@@ -754,6 +755,8 @@ export default function SettingsPage() {
                 </CardContent>
               )}
             </Card>
+
+            <TotpSettingsCard username={signedInAs ?? undefined} />
 
           </TabsContent>
 
@@ -1469,6 +1472,7 @@ export default function SettingsPage() {
             {/* Security: rules for every user's session, so admins only. */}
             <TabsContent value="security" className="space-y-6">
               <InactivitySettings />
+              <TwoFactorPolicyCard />
             </TabsContent>
 
             {/* Appliance: the machine XenMan runs on. The cards render nothing

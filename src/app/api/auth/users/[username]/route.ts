@@ -8,6 +8,7 @@ import {
   validatePassword,
   listUsers,
   setUserPools,
+  removeTotp,
   type UserRole,
 } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
@@ -38,7 +39,7 @@ export async function PUT(
   try {
     const { username } = await params;
     const body = await request.json();
-    const { role, newPassword, email, pools, signOut } = body;
+    const { role, newPassword, email, pools, signOut, resetTotp } = body;
 
     const before = currentUser(username);
 
@@ -147,6 +148,22 @@ export async function PUT(
         target: `user ${username}`,
         outcome: "success",
         detail: `Password set by administrator${ended ? `, ${ended} sign-in(s) ended` : ""}`,
+      });
+    }
+
+    // A lost phone: two-factor sign-in off, so the user signs in with the
+    // password and sets it up again; every sign-in of theirs ends.
+    if (resetTotp === true) {
+      if (!before) return NextResponse.json({ error: "User not found" }, { status: 404 });
+      if (!before.totpEnabled) return NextResponse.json({ error: "Two-factor sign-in is not on for this user" }, { status: 409 });
+      removeTotp(username);
+      const ended = signOutEverywhere(username);
+      auditRequest(request, {
+        category: "user",
+        action: "user_totp_reset",
+        target: `user ${username}`,
+        outcome: "success",
+        detail: `Two-factor sign-in reset by administrator${ended ? `, ${ended} sign-in(s) ended` : ""}`,
       });
     }
 

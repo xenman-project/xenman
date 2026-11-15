@@ -99,7 +99,7 @@ configure_network() {
 
 reset_password() {
   header
-  echo "  ${bold}Reset an administrator's password${reset}"
+  echo "  ${bold}Reset an administrator's password or two-factor sign-in${reset}"
   echo
   local admins name token addr
   mapfile -t admins < <("${NODE}" "${LIB}/reset-admin.js" list 2>/dev/null)
@@ -113,6 +113,19 @@ reset_password() {
   case "${i}" in ''|*[!0-9]*) return ;; esac
   name="${admins[$((i - 1))]:-}"
   [ -n "${name}" ] || return
+  # Two-factor sign-in on: the password, or a lost phone?
+  if "${NODE}" "${LIB}/reset-admin.js" has-totp "${name}" 2>/dev/null; then
+    echo
+    echo "    1) Clear the password"
+    echo "    2) Turn off two-factor sign-in (a lost phone)"
+    echo
+    read -r -p "  What to reset (Enter to cancel): " what || exit 0
+    case "${what}" in
+      1) ;;
+      2) reset_totp "${name}"; return ;;
+      *) return ;;
+    esac
+  fi
   read -r -p "  Clear the password of ${name}? (yes/no) " yn || exit 0
   case "${yn}" in y|yes|Y|YES|j|ja) ;; *) echo "  Nothing changed."; pause; return ;; esac
   if token=$("${NODE}" "${LIB}/reset-admin.js" reset "${name}"); then
@@ -123,6 +136,19 @@ reset_password() {
     echo "      ${bold}https://${addr:-<address>}/invite?token=${token}${reset}"
     echo
     echo "  and choose a new one. Until then nobody can log in as ${name}."
+  fi
+  pause
+}
+
+reset_totp() { # reset_totp <name>
+  local name="$1"
+  read -r -p "  Turn off two-factor sign-in of ${name}? (yes/no) " yn || exit 0
+  case "${yn}" in y|yes|Y|YES|j|ja) ;; *) echo "  Nothing changed."; pause; return ;; esac
+  if "${NODE}" "${LIB}/reset-admin.js" reset-totp "${name}"; then
+    echo
+    echo "  Two-factor sign-in of ${name} is off and their sign-ins have ended. ${name}"
+    echo "  signs in with the password alone and can set it up again under"
+    echo "  Settings -> Account."
   fi
   pause
 }
@@ -214,7 +240,7 @@ while :; do
   echo "    1) Show network"
   echo "    2) Configure network"
   echo "    3) Test connectivity"
-  echo "    4) Reset an administrator's password"
+  echo "    4) Reset an administrator's password or two-factor sign-in"
   echo "    5) Restart XenMan"
   echo "    6) Restart the appliance"
   echo "    7) Shut down the appliance"

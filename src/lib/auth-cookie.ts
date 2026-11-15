@@ -26,9 +26,9 @@ export function viaHttps(request: NextRequest): boolean {
  * with HTTPS switched off -- where a Secure cookie would never come back.
  * Without server.js, Secure: browsers accept it on http://localhost too.
  */
-export function setAuthCookie(request: NextRequest, response: NextResponse, value: string, maxAge = SESSION_SECONDS) {
+export function setAuthCookie(request: NextRequest, response: NextResponse, value: string, maxAge = SESSION_SECONDS, name = COOKIE_NAME) {
   const t = transport(request);
-  response.cookies.set(COOKIE_NAME, value, {
+  response.cookies.set(name, value, {
     httpOnly: true,
     secure: t !== "http-local" && t !== "http",
     sameSite: "lax",
