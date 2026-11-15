@@ -138,7 +138,7 @@ import {
   createIscsiSr, IscsiError, ISCSI_PORT, loadPoolSrView, lunInUse, probeLun, reattachIscsiSr, scanIqns, scanLuns,
   type IscsiLunConfig, type IscsiTarget,
 } from "@/lib/sr-iscsi";
-import { getMaintenanceJob, runningFor, startMaintenance } from "@/lib/host-maintenance-job";
+import { checkCoordinatorChange, coordinatorOptions, getMaintenanceJob, runningFor, runningInPool, sessionCall, startDesignate, startMaintenance } from "@/lib/host-maintenance-job";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -826,7 +826,7 @@ const READ_ONLY_ACTIONS = new Set([
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
   "pool_networks", "task_status", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
-  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status",
+  "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status", "pool_coordinator_options",
   "pvs_overview", "pvs_vm_status",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
@@ -857,6 +857,8 @@ const ADMIN_ONLY_ACTIONS = new Set([
   "network_create", "network_update", "network_destroy", "network_configure_ip", "network_management_change",
   "host_console", "host_evacuate", "host_disable", "host_enable",
   "host_maintenance_enter", "host_maintenance_exit",
+  // A new pool coordinator: with maintenance mode, as XenCenter, or on its own.
+  "pool_designate_coordinator",
   "host_restart_toolstack",
   // The control domain's memory, and with it a reboot of the server.
   "host_control_domain_memory",
@@ -1724,10 +1726,38 @@ async function dispatch(request: NextRequest) {
         const poolId = lookupSession(sessionRef)?.hostId ?? "";
         const already = runningFor(poolId, hostRef);
         if (already) return NextResponse.json({ job: already });
-        const job = await startMaintenance(
-          { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) },
-          hostRef,
-        );
+        const ctx = { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) };
+        // The coordinator, with a new one to take over once it is empty (EvacuateHostDialog).
+        const newCoordinatorRef = body.newCoordinatorRef;
+        let newCoordinator;
+        if (newCoordinatorRef !== undefined && newCoordinatorRef !== null && newCoordinatorRef !== "") {
+          if (!isXenRef(newCoordinatorRef)) return NextResponse.json({ error: "No such host in this pool" }, { status: 400 });
+          if (runningInPool(poolId)) return NextResponse.json({ error: "Wait until the running maintenance or coordinator job in this pool has finished" }, { status: 409 });
+          const check = await checkCoordinatorChange(sessionCall(ctx), newCoordinatorRef, hostRef);
+          if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+          newCoordinator = check.to;
+        }
+        const job = await startMaintenance(ctx, hostRef, newCoordinator);
+        return NextResponse.json({ job }, { status: 202 });
+      }
+
+      case "pool_coordinator_options": {
+        // What the maintenance and "Make Pool Coordinator" dialogs offer.
+        if (!isXenRef(hostRef)) return NextResponse.json({ error: "No host given" }, { status: 400 });
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        const ctx = { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) };
+        return NextResponse.json(await coordinatorOptions(sessionCall(ctx), hostRef));
+      }
+
+      case "pool_designate_coordinator": {
+        // "Make Pool Coordinator": Pool.async_designate_new_master on its own, the VMs left running.
+        if (!isXenRef(hostRef)) return NextResponse.json({ error: "No host given" }, { status: 400 });
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        if (runningInPool(poolId)) return NextResponse.json({ error: "Wait until the running maintenance or coordinator job in this pool has finished" }, { status: 409 });
+        const ctx = { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) };
+        const check = await checkCoordinatorChange(sessionCall(ctx), hostRef);
+        if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+        const job = startDesignate(ctx, check.to, check.from);
         return NextResponse.json({ job }, { status: 202 });
       }
 

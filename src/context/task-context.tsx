@@ -48,7 +48,7 @@ function persistPendingTasks(tasks: XenTaskInfo[]) {
 }
 
 export function TaskProvider({ children }: { children: React.ReactNode }) {
-  const { state, refreshHost } = useXen();
+  const { state, refreshHost, reconnectPool } = useXen();
   const [tasks, setTasks] = useState<XenTaskInfo[]>(() => loadPersistedTasks());
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
@@ -112,8 +112,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
 
           if (!res.ok) continue;
           let data = await res.json();
+          let coordinatorChanged = false;
           if (jobId) {
             const job = data.job ?? {};
+            coordinatorChanged = job.state === "done" && job.coordinatorChanged === true;
             data = {
               status: job.state === "done" ? "success" : job.state === "failed" ? "failure" : "pending",
               progress: job.progress,
@@ -141,8 +143,10 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
             }),
           );
 
-          // Refresh host data on completion
-          if (data.status === "success" || data.status === "failure") {
+          // Refresh host data on completion -- or, with a new coordinator, connect
+          // again: the session went with the old one.
+          if (coordinatorChanged) reconnectPool(task.hostId);
+          else if (data.status === "success" || data.status === "failure") {
             refreshHost(task.hostId).catch(() => {});
           }
         } catch {
@@ -152,7 +156,7 @@ export function TaskProvider({ children }: { children: React.ReactNode }) {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [tasks, state.connections, refreshHost]);
+  }, [tasks, state.connections, refreshHost, reconnectPool]);
 
   // Auto-remove completed/failed tasks after 10 seconds
   useEffect(() => {

@@ -298,7 +298,7 @@ export interface XenTaskInfo {
   id: string;
   taskRef: string;
   hostId: string;
-  type: "vm_migrate" | "host_evacuate" | "vm_create" | "vm_copy";
+  type: "vm_migrate" | "host_evacuate" | "vm_create" | "vm_copy" | "pool_coordinator";
   label: string;
   description: string;
   status: "pending" | "success" | "failure" | "cancelled";

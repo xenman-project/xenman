@@ -24,6 +24,7 @@ import {
   HostConnection,
   ParsedXenEvent,
 } from "@/lib/types";
+import type { CoordinatorOptions } from "@/lib/pool-coordinator";
 
 interface AppState {
   connections: Record<string, HostConnection>;
@@ -537,10 +538,18 @@ interface XenContextValue {
     vmRef: string,
     targetHostRef: string,
   ) => Promise<string | null>;
+  /** For the coordinator, `newCoordinatorRef` takes over once it is empty (XenCenter's EvacuateHostDialog). */
   hostMaintenanceEnter: (
     hostId: string,
     xenHostRef: string,
+    newCoordinatorRef?: string,
   ) => Promise<string | null>;
+  /** "Make Pool Coordinator": a job, as "job:<id>" for the task list. */
+  designateCoordinator: (hostId: string, xenHostRef: string) => Promise<string | null>;
+  /** What the dialogs offer: whether the host is the coordinator, who could take over, what stops it. */
+  coordinatorOptions: (hostId: string, xenHostRef: string) => Promise<CoordinatorOptions>;
+  /** The pool's coordinator changed: its session went with the old one, so connect again. */
+  reconnectPool: (hostId: string) => void;
   hostMaintenanceExit: (
     hostId: string,
     xenHostRef: string,
@@ -973,7 +982,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
   );
 
   const hostMaintenanceEnter = useCallback(
-    async (hostId: string, xenHostRef: string): Promise<string | null> => {
+    async (hostId: string, xenHostRef: string, newCoordinatorRef?: string): Promise<string | null> => {
       const conn = state.connections[hostId];
       if (!conn?.session) return null;
 
@@ -990,7 +999,7 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch("/api/xen", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "host_maintenance_enter", ...base }),
+        body: JSON.stringify({ action: "host_maintenance_enter", ...base, ...(newCoordinatorRef ? { newCoordinatorRef } : {}) }),
       });
 
       if (!res.ok) {
@@ -1003,6 +1012,49 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
       return data.job?.id ? `job:${data.job.id}` : null;
     },
     [state.connections, refreshHost],
+  );
+
+  /** A host action against the pool's session, its answer or its error. */
+  const poolAction = useCallback(
+    async <T,>(hostId: string, action: string, xenHostRef: string, failed: string): Promise<T> => {
+      const conn = state.connections[hostId];
+      if (!conn?.session) throw new Error("Not connected");
+      const res = await fetch("/api/xen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          host: conn.connectedVia || conn.host.address,
+          port: conn.host.port,
+          useSsl: conn.host.useSsl,
+          sessionRef: conn.session.sessionRef,
+          hostRef: xenHostRef,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || failed);
+      return data as T;
+    },
+    [state.connections],
+  );
+
+  const designateCoordinator = useCallback(
+    async (hostId: string, xenHostRef: string): Promise<string | null> => {
+      const data = await poolAction<{ job?: { id?: string } }>(hostId, "pool_designate_coordinator", xenHostRef, "The coordinator could not be changed");
+      return data.job?.id ? `job:${data.job.id}` : null;
+    },
+    [poolAction],
+  );
+
+  const coordinatorOptions = useCallback(
+    (hostId: string, xenHostRef: string) =>
+      poolAction<CoordinatorOptions>(hostId, "pool_coordinator_options", xenHostRef, "Could not ask the pool about its coordinator"),
+    [poolAction],
+  );
+
+  const reconnectPool = useCallback(
+    (hostId: string) => void reconnectAfterSessionLoss(hostId),
+    [reconnectAfterSessionLoss],
   );
 
   const hostMaintenanceExit = useCallback(
@@ -1215,7 +1267,9 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
               await refreshHostRef.current(entry.hostId);
               continue;
             }
-            if (result.error === "SESSION_INVALID") {
+            // HOST_IS_SLAVE: the server this session was opened with is no
+            // longer the coordinator (a new one designated, HA) -- gone as well.
+            if (result.error === "SESSION_INVALID" || result.error === "HOST_IS_SLAVE") {
               // The session is gone; polling it again cannot help. Connected
               // again, the pool changes connectedHostsKey, which restarts this
               // effect with its new session.
@@ -1282,6 +1336,9 @@ export function XenProvider({ children }: { children: React.ReactNode }) {
         vmMigrate: vmMigrateAction,
         hostMaintenanceEnter,
         hostMaintenanceExit,
+        designateCoordinator,
+        coordinatorOptions,
+        reconnectPool,
         poolJoin: poolJoinAction,
       }}
     >

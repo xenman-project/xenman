@@ -55,6 +55,7 @@ import {
 import { LicenseManagerDialog } from "@/components/license-manager";
 import { AddServerDialog } from "@/components/pool/add-server-dialog";
 import { RemoveServerDialog } from "@/components/pool/remove-server-dialog";
+import { DesignateCoordinatorDialog, EnterMaintenanceDialog } from "@/components/pool/coordinator-dialogs";
 import { ConvertToTemplateDialog, CopyVmDialog } from "@/components/vm/copy-vm-dialog";
 import { useAuth, type UserRole } from "@/context/auth-context";
 
@@ -598,7 +599,6 @@ function HostButton({
   navigateHome,
   conn,
   hostRecords,
-  hostMaintenanceEnter,
   hostMaintenanceExit,
   refreshHost,
   isMaster,
@@ -615,7 +615,6 @@ function HostButton({
   navigateHome: () => void;
   conn: { host: { address: string; port: number; useSsl: boolean }; session: { sessionRef: string } | null; connectedVia?: string };
   hostRecords: XenHostRecord[];
-  hostMaintenanceEnter: (hostId: string, xenHostRef: string) => Promise<string | null>;
   hostMaintenanceExit: (hostId: string, xenHostRef: string) => Promise<void>;
   refreshHost: (hostId: string) => Promise<void>;
   isMaster?: boolean;
@@ -625,11 +624,11 @@ function HostButton({
   onRemoveFromPool?: () => void;
   children?: React.ReactNode;
 }) {
-  const { addTask } = useTask();
   const { role: userRole } = useAuth();
   const isViewerRole = userRole === "viewer";
   const isAdmin = userRole === "admin";
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [designateOpen, setDesignateOpen] = useState(false);
   const [confirmRestartToolstack, setConfirmRestartToolstack] = useState(false);
   const [confirmShutdown, setConfirmShutdown] = useState(false);
   const [confirmReboot, setConfirmReboot] = useState(false);
@@ -671,24 +670,6 @@ function HostButton({
       }
     } catch (err) {
       console.error("Host console fetch failed:", err);
-    }
-  }
-
-  async function handleEnterMaintenance() {
-    setConfirmOpen(false);
-    try {
-      const taskRef = await hostMaintenanceEnter(hostId, xh.ref);
-      if (taskRef) {
-        addTask({
-          taskRef,
-          hostId,
-          type: "host_evacuate",
-          label: `Evacuating ${xh.nameLabel}`,
-          description: "Migrating all VMs to other hosts",
-        });
-      }
-    } catch (err) {
-      console.error("Enter maintenance failed:", err);
     }
   }
 
@@ -819,6 +800,13 @@ function HostButton({
                   Exit Maintenance Mode
                 </ContextMenuItem>
               ) : null}
+              {/* XenMan's own: a new coordinator without maintenance mode (the dialog says what stops it). */}
+              {!isMaster && xh.enabled && hostRecords.length > 1 && (
+                <ContextMenuItem onClick={() => setDesignateOpen(true)}>
+                  <Crown className="h-4 w-4" />
+                  Make Pool Coordinator
+                </ContextMenuItem>
+              )}
               <ContextMenuSeparator />
               <ContextMenuItem onClick={() => setConfirmRestartToolstack(true)}>
                 <RotateCw className="h-4 w-4" />
@@ -855,23 +843,12 @@ function HostButton({
       </ContextMenu>
       {children}
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Enter Maintenance Mode</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will disable <strong>{xh.nameLabel}</strong> and migrate all
-              running VMs to other available hosts. Continue?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleEnterMaintenance}>
-              Enter Maintenance
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {confirmOpen && (
+        <EnterMaintenanceDialog hostId={hostId} hostRef={xh.ref} hostName={xh.nameLabel} onClose={() => setConfirmOpen(false)} />
+      )}
+      {designateOpen && (
+        <DesignateCoordinatorDialog hostId={hostId} hostRef={xh.ref} hostName={xh.nameLabel} onClose={() => setDesignateOpen(false)} />
+      )}
 
       <AlertDialog open={confirmRestartToolstack} onOpenChange={setConfirmRestartToolstack}>
         <AlertDialogContent>
@@ -1374,7 +1351,6 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
     vmPowerAction,
     vmStartOn,
     vmMigrate,
-    hostMaintenanceEnter,
     hostMaintenanceExit,
     adoptHost,
   } = useXen();
@@ -2026,7 +2002,7 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
                                     Hosts
                                   </div>
                                   {filteredXenHosts.map((xh) => (
-                                    <HostButton key={xh.ref} xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceEnter={hostMaintenanceEnter} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined} />
+                                    <HostButton key={xh.ref} xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined} />
                                   ))}
                                   <Separator className="my-1" />
                                 </>
@@ -2079,7 +2055,7 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
                             const hostVms = sortVms(vms.filter((vm) => vm.residentOn === xh.ref));
                             return (
                               <div key={xh.ref}>
-                                <HostButton xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceEnter={hostMaintenanceEnter} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined}>
+                                <HostButton xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined}>
                                   {hostVms.length > 0 && (
                                     <div className="ml-3">
                                       {hostVms.map((vm) => (
@@ -2119,7 +2095,7 @@ export function Sidebar({ variant = "docked" }: { variant?: "docked" | "drawer" 
                                 Hosts
                               </div>
                               {filteredXenHosts.map((xh) => (
-                                <HostButton key={xh.ref} xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceEnter={hostMaintenanceEnter} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined} />
+                                <HostButton key={xh.ref} xh={xh} hostId={host.id} selectedXenHostRef={state.selectedXenHostRef} selectHost={selectHost} selectXenHost={selectXenHost} navigateHome={navigateHome} conn={conn} hostRecords={xenHosts} hostMaintenanceExit={hostMaintenanceExit} refreshHost={refreshHost} isMaster={xh.ref === poolMasterRef} draggingVm={draggingVm} onHostDrop={handleHostDrop} onRemoveFromPool={role === "admin" ? () => setRemoving({ hostId: host.id, ref: xh.ref, name: xh.nameLabel, poolName: pools[0]?.nameLabel || host.name }) : undefined} />
                               ))}
                               {sidebarView !== "hosts-only" && <Separator className="my-1" />}
                             </>

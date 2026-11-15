@@ -3,7 +3,6 @@
 import React from "react";
 import { useXen } from "@/context/xen-context";
 import { useAuth } from "@/context/auth-context";
-import { useTask } from "@/context/task-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -66,7 +65,8 @@ import {
 import { GpuTab } from "@/components/gpu/gpu-tab";
 import { MemoryTab } from "@/components/memory/memory-tab";
 import { StorageTab } from "@/components/host-detail";
-import { HardDrive, Unlink } from "lucide-react";
+import { Crown, HardDrive, Unlink } from "lucide-react";
+import { DesignateCoordinatorDialog, EnterMaintenanceDialog } from "@/components/pool/coordinator-dialogs";
 import { RemoveServerDialog, removeBlockedReason } from "@/components/pool/remove-server-dialog";
 import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { PerfCharts } from "@/components/perf-charts";
@@ -158,18 +158,19 @@ interface HostPowerAction {
 }
 
 export function XenHostDetail() {
-  const { state, selectXenHost, selectVm, refreshHost, hostMaintenanceEnter, hostMaintenanceExit, adoptHost } = useXen();
+  const { state, selectXenHost, selectVm, refreshHost, hostMaintenanceExit, adoptHost } = useXen();
   // Remove From Pool (XenCenter): its own dialog, the name typed.
   // Kept with the name it had: the server leaves the pool (and this view) while the job runs.
   const [removing, setRemoving] = React.useState<{ ref: string; name: string; poolName: string } | null>(null);
   const { role } = useAuth();
-  const { addTask } = useTask();
   const canAct = role === "admin" || role === "operator";
   const isAdmin = role === "admin";
   const [consoleLoading, setConsoleLoading] = React.useState(false);
   const [createVmOpen, setCreateVmOpen] = React.useState(false);
   const [pendingAction, setPendingAction] = React.useState<HostPowerAction | null>(null);
   const [actionLoading, setActionLoading] = React.useState<string | null>(null);
+  const [maintenanceOpen, setMaintenanceOpen] = React.useState(false);
+  const [designateOpen, setDesignateOpen] = React.useState(false);
 
   const hostId = state.selectedHostId;
   const xenHostRef = state.selectedXenHostRef;
@@ -324,19 +325,6 @@ export function XenHostDetail() {
     setActionLoading(actionKey);
     try {
       switch (actionKey) {
-        case "maintenance_enter": {
-          const taskRef = await hostMaintenanceEnter(hostId!, xenHostRef!);
-          if (taskRef) {
-            addTask({
-              taskRef,
-              hostId: hostId!,
-              type: "host_evacuate",
-              label: `Evacuating ${xenHost.nameLabel}`,
-              description: "Migrating all VMs to other hosts",
-            });
-          }
-          break;
-        }
         case "maintenance_exit":
           await hostMaintenanceExit(hostId!, xenHostRef!);
           break;
@@ -455,7 +443,8 @@ export function XenHostDetail() {
                         <React.Fragment key={action.key}>
                           {action.separator && <DropdownMenuSeparator />}
                           <DropdownMenuItem
-                            onClick={() => setPendingAction(action)}
+                            // Maintenance mode has a dialog of its own: for the coordinator, who takes over.
+                            onClick={() => (action.key === "maintenance_enter" ? setMaintenanceOpen(true) : setPendingAction(action))}
                             className={action.destructive ? "text-red-600" : ""}
                           >
                             {action.icon}
@@ -463,6 +452,16 @@ export function XenHostDetail() {
                           </DropdownMenuItem>
                         </React.Fragment>
                       ))}
+                      {/* XenMan's own: a new coordinator without maintenance mode. */}
+                      {hostCount > 1 && !isMaster && xenHost.enabled && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => setDesignateOpen(true)}>
+                            <Crown className="h-4 w-4" />
+                            <span className="ml-2">Make Pool Coordinator</span>
+                          </DropdownMenuItem>
+                        </>
+                      )}
                       {hostCount > 1 && (
                         <>
                           <DropdownMenuSeparator />
@@ -967,6 +966,12 @@ export function XenHostDetail() {
       </div>
 
       {removeDialog}
+      {maintenanceOpen && (
+        <EnterMaintenanceDialog hostId={hostId} hostRef={xenHostRef} hostName={xenHost.nameLabel} onClose={() => setMaintenanceOpen(false)} />
+      )}
+      {designateOpen && (
+        <DesignateCoordinatorDialog hostId={hostId} hostRef={xenHostRef} hostName={xenHost.nameLabel} onClose={() => setDesignateOpen(false)} />
+      )}
 
       {/* Host Power Action Confirmation */}
       <AlertDialog

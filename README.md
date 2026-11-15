@@ -8,7 +8,7 @@ A modern web-based management interface for XenServer / XCP-ng hosts and virtual
 
 Many workflows follow XenCenter's, with its checks and texts, so XenMan feels familiar.
 
-- **Pools & hosts** — several pools at once, maintenance mode, add and remove servers, control domain memory, certificate pinning
+- **Pools & hosts** — several pools at once, maintenance mode, a new pool coordinator, add and remove servers, control domain memory, certificate pinning
 - **Multi-site** — pools at other sites behind NAT or a firewall's virtual IP: each host at an address of its own, or one address with a port per host, so consoles and performance graphs work there too ([details](#pools-at-other-sites-hosts-behind-nat))
 - **VMs** — create, import (XVA), start/stop, migrate, copy (fast clone or full copy), delete; templates from VMs and snapshots; edit CPU, memory, disks, network and boot settings; virtual GPUs per VM
 - **Console** — VNC in the browser with keyboard macros and clipboard paste; RDP file download
