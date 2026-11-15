@@ -390,7 +390,7 @@ export default function UsersPage() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-3 pb-20 pt-3 sm:px-6 sm:pt-6 md:pb-6">
+      <div className="mx-auto max-w-6xl px-3 pb-20 pt-3 sm:px-6 sm:pt-6 md:pb-6">
         {/* Header */}
         <div className="mb-6 flex items-center gap-3">
           <Link href="/">
@@ -521,6 +521,7 @@ export default function UsersPage() {
                             )}
                           </TableCell>
                           <TableCell>
+                            <div className="flex items-center gap-1.5">
                             {user.invited ? (
                               <Badge
                                 variant="outline"
@@ -538,11 +539,12 @@ export default function UsersPage() {
                               </Badge>
                             )}
                             {user.totpEnabled && (
-                              <Badge variant="outline" className="ml-1.5" title="Signs in with a code from an authenticator app">
+                              <Badge variant="outline" title="Two-factor sign-in on">
                                 <ShieldCheck className="mr-1 h-3 w-3" />
                                 2FA
                               </Badge>
                             )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <DropdownMenu>
