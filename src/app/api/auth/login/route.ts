@@ -10,6 +10,7 @@ import { startLoginSession } from "@/lib/login-sessions";
 import { auditRequest, clientIp } from "@/lib/audit";
 import { loginBlocked, loginFailed, loginSucceeded, waitText } from "@/lib/login-guard";
 import { PENDING_COOKIE, PENDING_SECONDS, signPending } from "@/lib/login-pending";
+import { localSignInClosedFor } from "@/lib/sso-config";
 
 function tooMany(waitMs: number) {
   return NextResponse.json(
@@ -70,6 +71,22 @@ export async function POST(request: NextRequest) {
         { status: 401 },
       );
     }
+    // Entra ID on, passwords for administrators only: the way in when Entra is down.
+    if (localSignInClosedFor(user.role)) {
+      auditRequest(request, {
+        actor: user.username,
+        role: user.role,
+        category: "auth",
+        action: "login",
+        outcome: "denied",
+        detail: "password sign-in is for administrators only; sign in with Microsoft",
+      });
+      return NextResponse.json(
+        { error: "Sign in with Microsoft. Signing in with a password is for administrators only.", ssoOnly: true },
+        { status: 403 },
+      );
+    }
+
     // The default password: everything else stays closed until it is changed.
     const changeFirst = mustChangePassword(user, password);
 

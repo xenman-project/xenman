@@ -18,7 +18,7 @@ Many workflows follow XenCenter's, with its checks and texts, so XenMan feels fa
 - **Updates** — host updates host by host: VMs moved away and back, restarts as XenServer asks, Workload Balancing paused meanwhile; a mail at the end, and one when an update needs an administrator
 - **Licensing & WLB** — License Manager, Workload Balancing
 - **Monitoring** — performance graphs, alerts, events and an audit log; syslog forwarding
-- **Users & security** — Admin / Operator / Viewer roles, invitations and password reset by mail, two-factor sign-in with an authenticator app (optionally required for administrators or everyone), sign-out everywhere, inactivity sign-out; HTTPS only
+- **Users & security** — Admin / Operator / Viewer roles, invitations and password reset by mail, two-factor sign-in with an authenticator app (optionally required for administrators or everyone), sign-in with Microsoft Entra ID, sign-out everywhere, inactivity sign-out; HTTPS only
 - **Settings** — SMTP, syslog, time and date format, TLS certificate; light and dark theme
 
 
@@ -182,6 +182,22 @@ The XenServer and mail server passwords are stored AES-256-GCM encrypted in `hos
 - **Elsewhere** (Docker, Windows) it is a key of its own in the data directory, `.secret-key`.
 
 Passwords stored by earlier versions are re-encrypted with the current key on the next start.
+
+## Sign in with Microsoft Entra ID
+
+Users can sign in with their Microsoft account; their XenMan role comes from Entra ID. MFA and Conditional Access are Entra's, so XenMan does not ask these users for its own two-factor code.
+
+1. In the Entra admin center, **App registrations → New registration**. Platform **Web**, redirect URI `https://<xenman address>/api/auth/sso/callback` (shown under **Settings → Security → Microsoft Entra ID**).
+2. **Certificates & secrets → New client secret**; copy its value.
+3. **App roles**: create `XenMan.Admin`, `XenMan.Operator` and `XenMan.Viewer` (allowed member types: Users/Groups).
+4. **Enterprise applications** → the app → **Users and groups**: assign users or groups a role. Setting **Assignment required** to *Yes* keeps everyone else out before they reach XenMan.
+5. In XenMan, **Settings → Security → Microsoft Entra ID**: tenant ID, client ID, client secret and XenMan's address; switch it on. **Test** checks that XenMan reaches Entra ID and that the tenant exists.
+
+On the first sign-in XenMan creates the account (the user name is the UPN); at every sign-in it takes the role from the app roles, the highest one if there are several. Someone without a role does not get in. Which pools operators and viewers see is still set in XenMan, under **Users**. An account XenMan already has under the same name is not taken over.
+
+**Password sign-in for administrators only** leaves passwords to administrators, as the way in when Entra ID cannot be reached. Switching Entra ID off ends the Entra accounts' sessions.
+
+XenMan has to reach `login.microsoftonline.com` over HTTPS; it does not use a proxy for it.
 
 ## Pools at other sites (hosts behind NAT)
 

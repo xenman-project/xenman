@@ -9,6 +9,7 @@ import { passwordProblem } from "./password-policy";
 import { seal, unseal } from "./secret-box";
 import { matchTotp, newRecoveryCodes, newTotpSecret, normalizeRecoveryCode } from "./totp";
 import { readTwoFactorPolicy, twoFactorRequiredFor } from "./twofactor-policy";
+import { ssoActive } from "./sso-config";
 
 const DATA_DIR = process.env.DATA_DIR || "/app/data";
 const USERS_FILE = path.join(DATA_DIR, "users.json");
@@ -62,7 +63,16 @@ export interface StoredUser {
   totpSetup?: string;
   /** The recovery codes, bcrypt hashes; each one is removed when used. */
   recoveryCodes?: string[];
+  /**
+   * An account that signs in with Microsoft Entra ID (lib/entra-oidc.ts): no
+   * password, its role from Entra's app roles at every sign-in. Found again by
+   * tenant and object id only, never by name.
+   */
+  sso?: { provider: "entra"; tid: string; oid: string; name?: string; lastLogin: string };
 }
+
+/** What an account that signs in with Entra ID is told when it tries something only passwords have. */
+export const SSO_ACCOUNT_TEXT = "This account signs in with Microsoft Entra ID";
 
 /**
  * Who a valid session token belongs to. The role is the user's role now, not
@@ -258,9 +268,12 @@ export function verifyToken(token: string): TokenPayload | null {
     if (typeof payload.sub !== "string" || typeof payload.sid !== "string") return null;
     if (!loginSessionValid(payload.sid, payload.sub)) return null;
     const user = usersForCheck().find((u) => u.username.toLowerCase() === payload.sub!.toLowerCase());
-    if (!user || !user.passwordHash) return null;
+    if (!user || (!user.passwordHash && !user.sso)) return null;
+    // Entra ID switched off: its accounts' sign-ins end with it.
+    if (user.sso && !ssoActive()) return null;
     const pwc = Boolean(payload.pwc || user.mustChangePassword);
-    const tfe = !user.totp && twoFactorRequiredFor(user.role, readTwoFactorPolicy());
+    // Entra ID accounts: their second factor is Entra's business.
+    const tfe = !user.sso && !user.totp && twoFactorRequiredFor(user.role, readTwoFactorPolicy());
     return { sub: user.username, role: user.role, sid: payload.sid, ...(pwc ? { pwc: true } : {}), ...(tfe ? { tfe: true } : {}) };
   } catch {
     return null;
@@ -277,6 +290,7 @@ export function changePassword(
     (u) => u.username.toLowerCase() === username.toLowerCase(),
   );
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: SSO_ACCOUNT_TEXT };
   if (!bcrypt.compareSync(currentPassword, user.passwordHash)) {
     return { success: false, error: "Current password is incorrect" };
   }
@@ -308,16 +322,62 @@ export function getUserRole(username: string): UserRole | null {
   return user?.role ?? null;
 }
 
-export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry" | "totp" | "totpSetup" | "recoveryCodes"> & {
+export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry" | "totp" | "totpSetup" | "recoveryCodes" | "sso"> & {
   invited?: boolean;
   totpEnabled?: boolean;
+  /** Signs in with Entra ID. */
+  sso?: { provider: "entra"; name?: string; lastLogin: string };
 })[] {
   // Neither the secret nor the recovery codes' hashes leave this file: whether it is on, nothing more.
-  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, totp, totpSetup: _setup, recoveryCodes: _codes, ...rest }) => ({
+  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, totp, totpSetup: _setup, recoveryCodes: _codes, sso, ...rest }) => ({
     ...rest,
     ...((!passwordHash && inviteToken) ? { invited: true } : {}),
     ...(totp ? { totpEnabled: true } : {}),
+    ...(sso ? { sso: { provider: sso.provider, ...(sso.name ? { name: sso.name } : {}), lastLogin: sso.lastLogin } } : {}),
   }));
+}
+
+/** Whether this account signs in with Entra ID. */
+export function isSsoUser(username: string): boolean {
+  return Boolean(findUser(loadUsers(), username)?.sso);
+}
+
+export type SsoUpsert =
+  | { user: StoredUser; created: boolean; roleChanged: boolean }
+  | { taken: true };
+
+/**
+ * The account behind an Entra ID sign-in, made on the first: found by tenant
+ * and object id; its role, mail and name as Entra says now. A name an account
+ * of XenMan's own already has is not taken over.
+ */
+export function upsertSsoUser(
+  claims: { tid: string; oid: string; username: string; email: string; name: string },
+  role: UserRole,
+): SsoUpsert {
+  const users = loadUsers();
+  const now = new Date().toISOString();
+  const known = users.find((u) => u.sso && u.sso.tid === claims.tid && u.sso.oid === claims.oid);
+  if (known) {
+    const roleChanged = known.role !== role;
+    known.role = role;
+    if (claims.email) known.email = claims.email;
+    known.sso = { ...known.sso!, ...(claims.name ? { name: claims.name } : {}), lastLogin: now };
+    saveUsers(users);
+    return { user: known, created: false, roleChanged };
+  }
+  if (findUser(users, claims.username)) return { taken: true };
+  const user: StoredUser = {
+    username: claims.username,
+    passwordHash: "",
+    createdAt: now,
+    role,
+    email: claims.email,
+    sso: { provider: "entra", tid: claims.tid, oid: claims.oid, ...(claims.name ? { name: claims.name } : {}), lastLogin: now },
+  };
+  users.push(user);
+  saveUsers(users);
+  return { user, created: true, roleChanged: false };
 }
 
 export function acceptInvite(
@@ -350,6 +410,7 @@ export function refreshInviteToken(username: string): { success: boolean; invite
   const users = loadUsers();
   const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase());
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: SSO_ACCOUNT_TEXT };
   if (user.passwordHash) return { success: false, error: "User already has a password" };
   const token = crypto.randomBytes(32).toString("hex");
   user.inviteToken = token;
@@ -423,6 +484,7 @@ export function updateUserRole(
     (u) => u.username.toLowerCase() === username.toLowerCase(),
   );
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: "The role of an account that signs in with Entra ID comes from its app roles in Entra ID" };
   if (user.role === "admin" && role !== "admin") {
     const adminCount = users.filter((u) => u.role === "admin").length;
     if (adminCount <= 1) {
@@ -457,6 +519,7 @@ export function resetUserPassword(
     (u) => u.username.toLowerCase() === username.toLowerCase(),
   );
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: SSO_ACCOUNT_TEXT };
   user.passwordHash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS);
   dropPasswordLinks(user);
   saveUsers(users);
@@ -474,6 +537,7 @@ export function generateResetToken(usernameOrEmail: string): { success: boolean;
       (u.email && u.email.toLowerCase() === input),
   );
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: SSO_ACCOUNT_TEXT };
   if (!user.email) return { success: false, error: "No email address configured for this account" };
   if (!user.passwordHash) return { success: false, error: "Account not yet activated" };
   const token = crypto.randomBytes(32).toString("hex");
@@ -516,6 +580,8 @@ export interface TotpState {
   recoveryLeft: number;
   /** The two-factor policy covers this user. */
   required: boolean;
+  /** Signs in with Entra ID: no password, no XenMan second factor. */
+  sso?: boolean;
 }
 
 export function totpState(username: string): TotpState | null {
@@ -524,7 +590,8 @@ export function totpState(username: string): TotpState | null {
   return {
     enabled: Boolean(user.totp),
     recoveryLeft: user.recoveryCodes?.length ?? 0,
-    required: twoFactorRequiredFor(user.role, readTwoFactorPolicy()),
+    required: !user.sso && twoFactorRequiredFor(user.role, readTwoFactorPolicy()),
+    ...(user.sso ? { sso: true } : {}),
   };
 }
 
@@ -533,6 +600,7 @@ export function startTotpSetup(username: string): { success: boolean; secret?: s
   const users = loadUsers();
   const user = findUser(users, username);
   if (!user) return { success: false, error: "User not found" };
+  if (user.sso) return { success: false, error: `${SSO_ACCOUNT_TEXT}; its second factor is set in Entra ID` };
   if (user.totp) return { success: false, error: "Two-factor sign-in is already on" };
   const secret = newTotpSecret();
   user.totpSetup = seal(secret);

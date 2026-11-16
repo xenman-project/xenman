@@ -7,6 +7,8 @@ const PUBLIC_PATHS = [
   "/signed-out",
   "/api/auth/login",
   "/api/auth/logout",
+  // Signing in with Microsoft Entra ID: the button's status, off to Entra, and back.
+  "/api/auth/sso",
   "/api/auth/forgot-password",
   "/api/auth/reset-password",
   "/api/auth/invite",

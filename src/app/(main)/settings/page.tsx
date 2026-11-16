@@ -51,6 +51,7 @@ import { AccessSettings } from "@/components/access-settings";
 import { TlsCertificate } from "@/components/tls-certificate";
 import { InactivitySettings } from "@/components/inactivity-settings";
 import { TotpSettingsCard, TwoFactorPolicyCard } from "@/components/totp-settings";
+import { SsoSettingsCard } from "@/components/sso-settings";
 import {
   Plus,
   Server,
@@ -126,7 +127,7 @@ export default function SettingsPage() {
     disconnectFromHost,
     poolJoin,
   } = useXen();
-  const { role, username: signedInAs } = useAuth();
+  const { role, username: signedInAs, sso: ssoAccount } = useAuth();
   const isAdmin = role === "admin";
   const { theme, setTheme, sidebarView, setSidebarView, sidebarLayout, setSidebarLayout, searchMode, setSearchMode, eventPolling, setEventPolling } = useTheme();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -676,7 +677,8 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
 
-            {/* Change Password */}
+            {/* Change Password -- not for an Entra ID account, which has none. */}
+            {!ssoAccount && (
             <Card>
               <CardHeader className="cursor-pointer" onClick={() => setPwOpen(!pwOpen)}>
                 <div className="flex w-full items-center justify-between">
@@ -755,8 +757,10 @@ export default function SettingsPage() {
                 </CardContent>
               )}
             </Card>
+            )}
 
-            <TotpSettingsCard username={signedInAs ?? undefined} />
+            {/* Entra ID accounts: their second factor is Entra's. */}
+            {!ssoAccount && <TotpSettingsCard username={signedInAs ?? undefined} />}
 
           </TabsContent>
 
@@ -1473,6 +1477,7 @@ export default function SettingsPage() {
             <TabsContent value="security" className="space-y-6">
               <InactivitySettings />
               <TwoFactorPolicyCard />
+              <SsoSettingsCard />
             </TabsContent>
 
             {/* Appliance: the machine XenMan runs on. The cards render nothing

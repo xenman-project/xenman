@@ -7,6 +7,8 @@ export type UserRole = "admin" | "operator" | "viewer";
 interface AuthContextValue {
   username: string | null;
   role: UserRole | null;
+  /** Signs in with Microsoft Entra ID: no password, no XenMan second factor. */
+  sso: boolean;
   loading: boolean;
   refetch: () => Promise<void>;
 }
@@ -16,6 +18,7 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [username, setUsername] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [sso, setSso] = useState(false);
   const [loading, setLoading] = useState(true);
 
   async function fetchMe() {
@@ -25,6 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const data = await res.json();
         setUsername(data.username);
         setRole(data.role);
+        setSso(data.sso === true);
       } else {
         setUsername(null);
         setRole(null);
@@ -42,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ username, role, loading, refetch: fetchMe }}>
+    <AuthContext.Provider value={{ username, role, sso, loading, refetch: fetchMe }}>
       {children}
     </AuthContext.Provider>
   );

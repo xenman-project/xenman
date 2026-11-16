@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthHeading, AuthShell } from "@/components/auth-shell";
+import { ssoErrorText } from "@/lib/sso-texts";
 
 // The sign-in form's controls: small bold
 // labels, slim fields, a rounded petrol button.
@@ -19,6 +20,23 @@ const LINK = "text-xs text-[var(--shell-link)] underline-offset-2 hover:underlin
 const noSubscribe = () => () => {};
 function useServerAddress() {
   return useSyncExternalStore(noSubscribe, () => window.location.host, () => "");
+}
+
+/** Why signing in with Microsoft did not work: /api/auth/sso/callback sends ?sso=<code>. */
+function useSsoError() {
+  return useSyncExternalStore(noSubscribe, () => new URLSearchParams(window.location.search).get("sso") ?? "", () => "");
+}
+
+/** Microsoft's four squares, as its sign-in buttons show them. */
+function MicrosoftLogo() {
+  return (
+    <svg viewBox="0 0 21 21" className="h-4 w-4" aria-hidden="true">
+      <rect x="1" y="1" width="9" height="9" fill="#f25022" />
+      <rect x="11" y="1" width="9" height="9" fill="#7fba00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00a4ef" />
+      <rect x="11" y="11" width="9" height="9" fill="#ffb900" />
+    </svg>
+  );
 }
 
 export default function LoginPage() {
@@ -40,6 +58,20 @@ export default function LoginPage() {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotSent, setForgotSent] = useState(false);
   const [forgotError, setForgotError] = useState("");
+
+  // Signing in with Microsoft Entra ID: the button, and the password form folded
+  // away when it is for administrators only.
+  const [sso, setSso] = useState<{ enabled: boolean; localAdminsOnly: boolean }>({ enabled: false, localAdminsOnly: false });
+  const [showLocal, setShowLocal] = useState(false);
+  const [ssoStarting, setSsoStarting] = useState(false);
+  const ssoError = ssoErrorText(useSsoError());
+  useEffect(() => {
+    fetch("/api/auth/sso")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setSso({ enabled: d.enabled === true, localAdminsOnly: d.localAdminsOnly === true }))
+      .catch(() => {});
+  }, []);
+  const localFolded = sso.enabled && sso.localAdminsOnly && !showLocal;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -279,6 +311,31 @@ export default function LoginPage() {
           title="XenMan"
           subtitle={serverAddress ? `Connected server: ${serverAddress}` : " "}
         />
+        {sso.enabled && (
+          <div className="mb-4 grid gap-3">
+            {ssoError && <p className="text-xs text-red-600 dark:text-red-400">{ssoError}</p>}
+            {/* A plain link: off to Microsoft and back is a full page load, not a route of this app. */}
+            <Button asChild variant="outline" className="h-8 w-full gap-2 rounded-full text-xs font-semibold">
+              <a href="/api/auth/sso/start" onClick={() => setSsoStarting(true)} aria-disabled={ssoStarting}>
+                <MicrosoftLogo />
+                {ssoStarting ? "Going to Microsoft" : "Sign in with Microsoft"}
+              </a>
+            </Button>
+            {localFolded ? (
+              <button type="button" className={LINK} onClick={() => setShowLocal(true)}>
+                Administrator sign-in
+              </button>
+            ) : (
+              <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                <span className="h-px flex-1 bg-zinc-300 dark:bg-zinc-700" />
+                {sso.localAdminsOnly ? "administrators" : "or"}
+                <span className="h-px flex-1 bg-zinc-300 dark:bg-zinc-700" />
+              </div>
+            )}
+          </div>
+        )}
+        {!sso.enabled && ssoError && <p className="mb-4 text-xs text-red-600 dark:text-red-400">{ssoError}</p>}
+        {!localFolded && (
         <form onSubmit={handleSubmit} className="grid gap-4">
           <div className="grid gap-1.5">
             <Label htmlFor="username" className={LABEL}>User name or email</Label>
@@ -321,6 +378,7 @@ export default function LoginPage() {
             Forgot password?
           </button>
         </form>
+        )}
       </div>
     </AuthShell>
   );

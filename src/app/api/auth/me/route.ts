@@ -12,6 +12,8 @@ export async function GET(request: NextRequest) {
     username: payload.sub,
     role: payload.role,
     totpEnabled: Boolean(totp?.enabled),
+    // Signs in with Microsoft Entra ID: no password and no XenMan second factor to manage.
+    ...(totp?.sso ? { sso: true } : {}),
     ...(payload.tfe ? { mustSetUpTotp: true } : {}),
   });
 }

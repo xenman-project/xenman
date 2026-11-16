@@ -81,6 +81,8 @@ interface UserRecord {
   pools?: string[];
   /** Signs in with a code from an authenticator app. */
   totpEnabled?: boolean;
+  /** Signs in with Microsoft Entra ID: no password, role from Entra. */
+  sso?: { provider: "entra"; name?: string; lastLogin: string };
 }
 
 /** Pools an admin can hand out, from /api/hosts. */
@@ -300,7 +302,8 @@ export default function UsersPage() {
     try {
       const isSelf = editUser.username.toLowerCase() === currentUser?.toLowerCase();
       const body: Record<string, string | string[]> = { email: editEmail };
-      if (!isSelf) body.role = editRole;
+      // An Entra ID account's role comes from Entra ID.
+      if (!isSelf && !editUser.sso) body.role = editRole;
       // Admins reach every pool by definition, so the list is only sent for
       // the other roles.
       if (editRole !== "admin") body.pools = editPools;
@@ -544,6 +547,15 @@ export default function UsersPage() {
                                 2FA
                               </Badge>
                             )}
+                            {user.sso && (
+                              <Badge
+                                variant="outline"
+                                className="border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400"
+                                title={`Signs in with Microsoft Entra ID${user.sso.name ? ` as ${user.sso.name}` : ""}; role from Entra ID. Last sign-in ${new Date(user.sso.lastLogin).toLocaleString()}`}
+                              >
+                                Entra
+                              </Badge>
+                            )}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -570,7 +582,8 @@ export default function UsersPage() {
                                   <Pencil className="mr-2 h-4 w-4" />
                                   Edit
                                 </DropdownMenuItem>
-                                {user.invited ? (
+                                {/* An Entra ID account has no password to send or set. */}
+                                {user.sso ? null : user.invited ? (
                                   <DropdownMenuItem
                                     disabled={resendLoading === user.username}
                                     onClick={() => handleResendInvite(user.username)}
@@ -799,7 +812,15 @@ export default function UsersPage() {
                 placeholder="user@example.com"
               />
             </div>
-            {editUser?.username.toLowerCase() !== currentUser?.toLowerCase() && (
+            {editUser?.sso ? (
+              <div className="grid gap-2">
+                <Label>Role</Label>
+                <p className="text-sm text-zinc-500">
+                  <span className="capitalize">{editUser.role}</span>, from the app roles in Entra ID. Change it there; it counts at the next
+                  sign-in.
+                </p>
+              </div>
+            ) : editUser?.username.toLowerCase() !== currentUser?.toLowerCase() && (
               <div className="grid gap-2">
                 <Label>Role</Label>
                 <Select

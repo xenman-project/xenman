@@ -150,12 +150,18 @@ function signedInUser(token) {
   if (!session || !same(session.user, payload.sub) || Date.parse(session.expiresAt) <= Date.now()) return null;
   const users = readJsonCached(path.join(DATA_DIR, "users.json"));
   const user = Array.isArray(users) && users.find((u) => u && same(u.username, payload.sub));
-  if (!user || !user.passwordHash) return null;
-  // As lib/twofactor-policy.ts: covered by the two-factor policy and not set up yet.
+  if (!user || (!user.passwordHash && !user.sso)) return null;
+  // As lib/sso-config.ts ssoActive(): Entra ID switched off ends its accounts' sign-ins.
+  if (user.sso) {
+    const sso = readJsonCached(path.join(DATA_DIR, "sso.json"));
+    if (!(sso && sso.enabled === true && sso.tenantId && sso.clientId && sso.clientSecret && sso.address)) return null;
+  }
+  // As lib/twofactor-policy.ts: covered by the two-factor policy and not set up yet
+  // (not an Entra ID account: its second factor is Entra's).
   const policy = readJsonCached(path.join(DATA_DIR, "twofactor.json"));
   const role = user.role || "admin";
   const required = policy && (policy.require === "all" || (policy.require === "admins" && role === "admin"));
-  const tfe = Boolean(required && !user.totp);
+  const tfe = Boolean(required && !user.totp && !user.sso);
   return { sub: user.username, role, pwc: Boolean(payload.pwc || user.mustChangePassword), tfe };
 }
 
