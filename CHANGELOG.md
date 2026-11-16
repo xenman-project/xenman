@@ -4,7 +4,7 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [1.0.4] - Unreleased
+## [1.0.4] - 2026-11-16
 
 ### Added
 - **Pools at other sites: hosts behind NAT.** A pool reached only through NAT, such as a firewall's virtual IP, could be managed, but its consoles, performance graphs, imports and SSH exports failed: XenServer hands those out at the hosts' own management addresses, as XenCenter finds too. A pool can now be told where each of its hosts is reached: an address of its own, or one address with a port per host (`1.2.3.4:4431`). Switched on as **Hosts are behind NAT** when adding a pool or when editing it; off by default. The hosts' certificates are checked as before.
