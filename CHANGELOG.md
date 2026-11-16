@@ -4,7 +4,7 @@ All notable changes to XenMan. Each release on GitHub takes its notes from the
 section of its version here; a release candidate (`v1.2.3-rc.1`) from the
 section of the version it leads to.
 
-## [Unreleased]
+## [1.0.5] - Unreleased
 
 ### Added
 - **Sign in with Microsoft Entra ID.** Under Settings > Security an administrator enters the app registration (tenant ID, client ID, client secret) and XenMan's address; the sign-in page then offers **Sign in with Microsoft**. The role comes from the app roles `XenMan.Admin`, `XenMan.Operator` and `XenMan.Viewer` at every sign-in; someone without one does not get in. XenMan creates the account at the first sign-in; pool access is still given in XenMan. MFA is left to Entra ID, so XenMan's two-factor code is not asked of these accounts. Password sign-in can be left to administrators only, as the way in when Entra ID is down. XenMan checks the ID token itself (signature against the tenant's keys, issuer, audience, tenant, nonce, PKCE), with no new dependency. The client secret is stored encrypted. See the README for setting up the app registration.
