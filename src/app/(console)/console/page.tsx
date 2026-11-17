@@ -825,6 +825,21 @@ function ConsoleToolbar({
   );
 }
 
+/** What the console says when XenMan closed it (server.js and vnc-proxy.js give the reason). */
+function consoleEndedText(reason: string): string {
+  switch (reason) {
+    case "Signed out":
+      return "You are signed out, so this console was closed. Sign in to XenMan again and open the console from there.";
+    case "Not allowed":
+      return "You may no longer use this console. Ask an administrator if you need it.";
+    case "Unknown session":
+    case "Unknown console":
+      return "This console's session has ended. Open the console again from XenMan.";
+    default:
+      return `The console was closed${reason ? `: ${reason}` : ""}. Open it again from XenMan.`;
+  }
+}
+
 /* ── Console Viewer ── */
 function ConsoleViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -832,6 +847,10 @@ function ConsoleViewer() {
   const rfbRef = useRef<RFBInstance | null>(null);
   const [connected, setConnected] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  /** Why the console ended for good: XenMan closed it, or the user is signed out. Nothing is retried then. */
+  const [ended, setEnded] = useState<string | null>(null);
+  /** How the last WebSocket closed: 1008 is XenMan refusing it, not a lost line. */
+  const lastClose = useRef<{ code: number; reason: string } | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalDisconnect = useRef(false);
   /** Bytes received from the console, for the connection info. */
@@ -869,9 +888,14 @@ function ConsoleViewer() {
 
     // Opened here rather than by noVNC, to count what arrives.
     const socket = new WebSocket(wsUrl, ["binary"]);
+    lastClose.current = null;
     socket.addEventListener("message", (e) => {
       const d = e.data as ArrayBuffer | Blob;
       bytes.current += "byteLength" in d ? d.byteLength : d.size;
+    });
+    // Before noVNC's own listener: its "disconnect" then knows why.
+    socket.addEventListener("close", (e) => {
+      lastClose.current = { code: e.code, reason: e.reason };
     });
     const rfb = new RFB(containerRef.current, socket) as unknown as RFBInstance;
     rfb.scaleViewport = true;
@@ -892,13 +916,26 @@ function ConsoleViewer() {
       setConnected(false);
       rfbRef.current = null;
 
-      // Auto-reconnect unless the user closed the window intentionally
-      if (!intentionalDisconnect.current) {
-        setReconnecting(true);
-        reconnectTimer.current = setTimeout(() => {
-          connect();
-        }, 2000);
+      if (intentionalDisconnect.current) return;
+      // Closed by XenMan on purpose (signed out, no longer allowed, the
+      // session gone): trying again cannot help, so it is said instead.
+      const closed = lastClose.current;
+      if (closed?.code === 1008) {
+        setReconnecting(false);
+        setEnded(consoleEndedText(closed.reason));
+        return;
       }
+      // Otherwise the line was lost: again in a moment -- while still signed in.
+      setReconnecting(true);
+      reconnectTimer.current = setTimeout(async () => {
+        const me = await fetch("/api/auth/me", { cache: "no-store" }).catch(() => null);
+        if (me && (me.status === 401 || me.status === 403)) {
+          setReconnecting(false);
+          setEnded(consoleEndedText("Signed out"));
+          return;
+        }
+        connect();
+      }, 2000);
     });
   }, [consoleUrl, sessionId, useSsl, label]);
 
@@ -959,7 +996,27 @@ function ConsoleViewer() {
       />
       <div style={{ flex: 1, overflow: "hidden", background: "#000", position: "relative" }}>
         <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-        {reconnecting && (
+        {ended && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 24,
+              textAlign: "center",
+              background: "rgba(0,0,0,0.85)",
+              color: "#ddd",
+              fontFamily: "monospace",
+              fontSize: 14,
+              zIndex: 11,
+            }}
+          >
+            {ended}
+          </div>
+        )}
+        {reconnecting && !ended && (
           <div
             style={{
               position: "absolute",
