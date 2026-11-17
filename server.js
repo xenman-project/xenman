@@ -185,7 +185,9 @@ function consoleRefusal(token, req) {
   const consoleUrl = params.get("consoleUrl");
   // Left to the console proxy, which says what is missing.
   if (!sessionId || !consoleUrl) return null;
-  const bound = globalThis._xenSessions && globalThis._xenSessions.get(sessionId);
+  // sessionId is the browser's handle; the XAPI session behind it stays here (lib/xen-sessions.ts).
+  const xapiRef = globalThis._xenSessionHandles && globalThis._xenSessionHandles.get(sessionId);
+  const bound = xapiRef && globalThis._xenSessions && globalThis._xenSessions.get(xapiRef);
   if (!bound || String(bound.actor).toLowerCase() !== user.sub.toLowerCase()) return "Unknown session";
   if (Date.now() - bound.lastUsed > XEN_SESSION_IDLE_MS) return "Unknown session";
   if (bound.hostConsoles && bound.hostConsoles.has(consoleUrl) && user.role !== "admin") return "Not allowed";

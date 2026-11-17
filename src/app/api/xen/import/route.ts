@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { requireRole } from "@/lib/api-auth";
 import { auditRequest } from "@/lib/audit";
 import { mayAccessHost } from "@/lib/pool-access";
-import { lookupSession } from "@/lib/xen-sessions";
+import { lookupSession, xapiRefOf } from "@/lib/xen-sessions";
 import { withPool } from "@/lib/xen-tls";
 import { XenApiError, xenApiCall } from "@/lib/xen-client";
 import { XapiTaskError } from "@/lib/xen-network-actions";
@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
   const auth = requireRole(request, "admin", "operator");
   if (auth.error) return auth.error;
   const q = request.nextUrl.searchParams;
-  const sessionRef = q.get("sessionRef") ?? "";
+  // The browser's handle; the XAPI session behind it stays here (lib/xen-sessions.ts).
+  const sessionRef = xapiRefOf(q.get("sessionRef")) ?? "";
   const srRef = q.get("srRef");
   const affinity = q.get("affinity");
   const fileName = (q.get("fileName") ?? "").slice(0, 255);

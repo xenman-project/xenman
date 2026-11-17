@@ -12,7 +12,7 @@ import {
   type UserRole,
 } from "@/lib/auth";
 import { auditRequest } from "@/lib/audit";
-import { removeSessionsForActor } from "@/lib/xen-sessions";
+import { removeSessionsForActor, removeSessionsOutside } from "@/lib/xen-sessions";
 import { endUserSessions } from "@/lib/login-sessions";
 
 /** Every sign-in of a user ended, and the pool connections opened with them. */
@@ -61,9 +61,10 @@ export async function PUT(
         });
         return NextResponse.json({ error: result.error }, { status: 400 });
       }
-      // No need to drop live sessions: /api/xen re-checks the grant on every
-      // request, so a revoked pool stops working at once while pools the user
-      // still holds keep running.
+      // /api/xen re-checks the grant on every request, so a revoked pool stops
+      // working at once while pools the user still holds keep running. The
+      // XAPI sessions on the revoked ones end at the pool as well.
+      if (before && before.role !== "admin") removeSessionsOutside(username, pools as string[]);
       const previous = before?.pools ?? [];
       auditRequest(request, {
         category: "user",
@@ -123,6 +124,8 @@ export async function PUT(
         outcome: "success",
         detail: `${before?.role ?? "?"} → ${role}`,
       });
+      // No longer an administrator: the pools not granted to them are closed, at the pool too.
+      if (role !== "admin") removeSessionsOutside(username, Array.isArray(pools) ? (pools as string[]) : (before?.pools ?? []));
     }
 
     if (newPassword) {

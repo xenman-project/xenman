@@ -169,7 +169,7 @@ import {
 } from "@/lib/xen-network-actions";
 import { mayAccessHost } from "@/lib/pool-access";
 import { buildHostNetworking } from "@/lib/xen-networking";
-import { grantConsole, lookupSession, registerSession, removeSession } from "@/lib/xen-sessions";
+import { grantConsole, lookupSession, registerSession, removeSession, xapiRefOf } from "@/lib/xen-sessions";
 import { drainPumps, stopPump, type PumpSpec } from "@/lib/xen-event-pump";
 import { withPool } from "@/lib/xen-tls";
 import { CertMismatchError, SshKeyMismatchError, checkSshKey, knownAddresses, sshKeyFingerprint } from "@/lib/host-trust";
@@ -957,12 +957,15 @@ async function dispatch(request: NextRequest) {
     actionName = body.action || "unknown";
     const {
       action,
-      sessionRef,
       vmRef,
       powerAction,
       metricsRef,
       hostRef,
     } = body;
+    // The browser holds a handle, never the XAPI session (lib/xen-sessions.ts):
+    // from here on `sessionRef` is the session behind it, or "" -- which the
+    // binding check below refuses like an expired one.
+    const sessionRef = xapiRefOf(body.sessionRef) ?? "";
 
     // The connection target is authoritative from the server side: for `connect`
     // it comes from the stored host record, for every other action from the
@@ -1109,10 +1112,11 @@ async function dispatch(request: NextRequest) {
         const redirectedToMaster = connectHost !== configured.address;
 
         // Bind the session so later actions can be authorized without trusting
-        // the client's host/port.
-        registerSession(session, {
+        // the client's host/port. The browser gets the handle, not the session.
+        const sessionHandle = registerSession(session, {
           hostId,
           actor: auth.sub,
+          sid: auth.sid,
           address: connectHost,
           port,
           useSsl,
@@ -1177,7 +1181,7 @@ async function dispatch(request: NextRequest) {
         recordAlertsAndTasks(hostId, alerts, poolTasks);
 
         return NextResponse.json({
-          sessionRef: session,
+          sessionRef: sessionHandle,
           vms,
           hosts: hostsWithMetrics,
           pools,
@@ -1191,7 +1195,7 @@ async function dispatch(request: NextRequest) {
 
       case "disconnect": {
         await logout(host, port, useSsl, sessionRef);
-        removeSession(sessionRef);
+        removeSession(sessionRef, false);
         // The pump notices a removed session on its own, but only after its
         // current event.from returns. Stopping it here closes that gap.
         stopPump(sessionRef);
@@ -1840,7 +1844,8 @@ async function dispatch(request: NextRequest) {
         }
         // Use the address the master session actually resolved to, so a pool
         // reached via backup address or master redirect still joins correctly.
-        const masterBound = lookupSession(masterSessionRef);
+        const masterRef = xapiRefOf(masterSessionRef);
+        const masterBound = masterRef ? lookupSession(masterRef) : null;
         if (masterBound && masterBound.actor.toLowerCase() !== auth.sub.toLowerCase()) {
           return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
         }
@@ -3464,7 +3469,9 @@ async function dispatch(request: NextRequest) {
         // does, and the address comes from the session registry rather than the
         // body. Bundling must not become a way to aim a poll at another pool.
         pools.forEach((entry, index) => {
-          const bound = entry.sessionRef ? lookupSession(entry.sessionRef) : null;
+          // Each entry carries a handle, as the single-session preamble does.
+          const ref = xapiRefOf(entry.sessionRef);
+          const bound = ref ? lookupSession(ref) : null;
           if (
             !bound ||
             bound.actor.toLowerCase() !== auth.sub.toLowerCase() ||
@@ -3475,7 +3482,7 @@ async function dispatch(request: NextRequest) {
           }
           specs.push({
             index,
-            sessionRef: entry.sessionRef as string,
+            sessionRef: ref as string,
             hostId: bound.hostId,
             host: bound.address,
             port: bound.port,
@@ -3899,7 +3906,8 @@ export async function POST(request: NextRequest) {
 
   // Everything the action does runs on behalf of the pool its session (or,
   // for connect, its host id) belongs to: the certificates checked are that pool's.
-  const poolId = fields.action === "connect" ? fields.hostId : fields.sessionRef ? lookupSession(fields.sessionRef)?.hostId : undefined;
+  const fieldsRef = xapiRefOf(fields.sessionRef);
+  const poolId = fields.action === "connect" ? fields.hostId : fieldsRef ? lookupSession(fieldsRef)?.hostId : undefined;
   const response = poolId ? await withPool(poolId, () => dispatch(request)) : await dispatch(request);
   const action = fields.action;
 

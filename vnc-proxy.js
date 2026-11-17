@@ -215,8 +215,10 @@ function handleVncUpgrade(ws, req, actor) {
 
   // Only a session XenMan opened, for the user asking: it says which pool
   // the console belongs to, and so which certificates it may present
-  // (lib/xen-sessions.ts and lib/host-trust.ts, both on globalThis).
-  const bound = globalThis._xenSessions && globalThis._xenSessions.get(sessionId);
+  // (lib/xen-sessions.ts and lib/host-trust.ts, both on globalThis). The
+  // browser holds a handle; the XAPI session behind it goes to the host only.
+  const xapiRef = globalThis._xenSessionHandles && globalThis._xenSessionHandles.get(sessionId);
+  const bound = xapiRef && globalThis._xenSessions && globalThis._xenSessions.get(xapiRef);
   if (!bound || !actor || bound.actor.toLowerCase() !== String(actor).toLowerCase()) {
     ws.close(1008, "Unknown session");
     return;
@@ -264,7 +266,7 @@ function handleVncUpgrade(ws, req, actor) {
 
   const xenHost = parsed.hostname;
   const xenPort = parseInt(parsed.port || (useSsl ? "443" : "80"), 10);
-  parsed.searchParams.set("session_id", sessionId);
+  parsed.searchParams.set("session_id", xapiRef);
   const requestPath = parsed.pathname + "?" + parsed.searchParams.toString();
 
   const httpRequest =

@@ -11,6 +11,7 @@ section of the version it leads to.
 
 ### Security
 Fixes from a security review of XenMan.
+- **Every user's browser held the pool's XenServer session**, viewers included. That session is opened with the pool's stored account, as a rule root, so whoever could reach the pool directly could use it past XenMan's roles, and it stayed valid after the XenMan account was signed out or removed. The browser now only gets a random handle that works through XenMan alone; the XenServer session never leaves XenMan. Signing out, being signed out everywhere, losing a pool or the account's removal now also end the XenServer session at the pool.
 - **Operators could restart or shut down a XenServer host** through the API, although the Power menu is shown to administrators only. Both are now for administrators only, as disabling a host already was.
 - **Operators could set any key in a host's `other_config`** through two API actions the interface never used. They are removed.
 - **An operator's SSH export could write anywhere on the host as root**, for example filling the control domain's file system. Operators now export below `/mnt`, `/media` or an SR's mount point, and only into a mounted file system; administrators as before. An export's status is only shown to whoever started it and to administrators.
