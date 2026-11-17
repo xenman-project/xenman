@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken, COOKIE_NAME, type TokenPayload, type UserRole } from "@/lib/auth";
+import { CROSS_SITE_ERROR, crossSiteRequest } from "@/lib/request-origin";
 
 export function authenticateRequest(request: NextRequest): TokenPayload | null {
   const token = request.cookies.get(COOKIE_NAME)?.value;
@@ -13,6 +14,10 @@ export function requireRole(
 ):
   | { payload: TokenPayload; error?: undefined }
   | { error: NextResponse; payload?: undefined } {
+  // proxy.ts refuses these too; repeated for the routes it leaves out (/api/update, /api/xen/import).
+  if (crossSiteRequest(request)) {
+    return { error: NextResponse.json({ error: CROSS_SITE_ERROR }, { status: 403 }) };
+  }
   const payload = authenticateRequest(request);
   if (!payload) {
     return {

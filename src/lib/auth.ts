@@ -322,14 +322,15 @@ export function getUserRole(username: string): UserRole | null {
   return user?.role ?? null;
 }
 
-export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry" | "totp" | "totpSetup" | "recoveryCodes" | "sso"> & {
+export function listUsers(): (Omit<StoredUser, "passwordHash" | "inviteToken" | "inviteTokenExpiry" | "resetToken" | "resetTokenExpiry" | "totp" | "totpSetup" | "recoveryCodes" | "sso"> & {
   invited?: boolean;
   totpEnabled?: boolean;
   /** Signs in with Entra ID. */
   sso?: { provider: "entra"; name?: string; lastLogin: string };
 })[] {
   // Neither the secret nor the recovery codes' hashes leave this file: whether it is on, nothing more.
-  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, totp, totpSetup: _setup, recoveryCodes: _codes, sso, ...rest }) => ({
+  // Nor a reset link someone asked for: it is theirs, an administrator who saw it could use it in their name.
+  return loadUsers().map(({ passwordHash, inviteToken, inviteTokenExpiry: _exp, resetToken: _reset, resetTokenExpiry: _resetExp, totp, totpSetup: _setup, recoveryCodes: _codes, sso, ...rest }) => ({
     ...rest,
     ...((!passwordHash && inviteToken) ? { invited: true } : {}),
     ...(totp ? { totpEnabled: true } : {}),

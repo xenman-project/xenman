@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyDisable, applyEnable, applyRemoveSite, applySite, buildPvsOverview, loadPvsRecords, planDisable, planEnable, planRemoveSite, planSite, pvsError, pvsStatusText } from "@/lib/xen-pvs";
+import crypto from "crypto";
 import { Client as SshClient } from "ssh2";
 import { authenticateRequest } from "@/lib/api-auth";
+import type { UserRole } from "@/lib/auth";
 import { loadHostsFromDisk } from "@/lib/host-storage";
 import {
   loginToHost,
@@ -56,7 +58,6 @@ import {
   vbdEject,
   hostDisable,
   hostEnable,
-  hostAddToOtherConfig,
   hostRemoveFromOtherConfig,
   hostEvacuateAsync,
   poolJoin,
@@ -751,6 +752,15 @@ interface SshExportJob {
   targetPath?: string;
   startedAt: number;
   finishedAt?: number;
+  /** Whose and which pool's: its status is told to nobody else. */
+  poolId?: string;
+  actor?: string;
+}
+
+/** The job's outcome, keeping what it was started with (pool, actor, target). */
+function settleExportJob(jobId: string, patch: Partial<SshExportJob>) {
+  const prev = sshExportJobs.get(jobId);
+  sshExportJobs.set(jobId, { startedAt: Date.now(), ...prev, ...patch, status: patch.status ?? prev?.status ?? "failure", finishedAt: Date.now() });
 }
 
 // Use globalThis so the Map survives HMR module reloads in dev mode
@@ -774,8 +784,7 @@ function runSshCommand(
   conn.on("ready", () => {
     conn.exec(cmd, (err, stream) => {
       if (err) {
-        const prev = sshExportJobs.get(jobId);
-        sshExportJobs.set(jobId, { status: "failure", error: err.message, startedAt: prev?.startedAt ?? Date.now(), finishedAt: Date.now() });
+        settleExportJob(jobId, { status: "failure", error: err.message });
         conn.end();
         return;
       }
@@ -786,25 +795,20 @@ function runSshCommand(
       stream.on("data", (data: Buffer) => { stdout += data.toString(); });
       stream.stderr.on("data", (data: Buffer) => { stderr += data.toString(); });
       stream.on("close", (code: number) => {
-        const prev = sshExportJobs.get(jobId);
-        const startedAt = prev?.startedAt ?? Date.now();
-        const targetPath = prev?.targetPath;
         if (code === 0) {
-          sshExportJobs.set(jobId, { status: "success", startedAt, targetPath, finishedAt: Date.now() });
+          settleExportJob(jobId, { status: "success" });
         } else {
-          const errorMsg = stderr.trim() || stdout.trim() || `Exit code ${code}`;
-          sshExportJobs.set(jobId, { status: "failure", error: errorMsg, startedAt, targetPath, finishedAt: Date.now() });
+          settleExportJob(jobId, { status: "failure", error: stderr.trim() || stdout.trim() || `Exit code ${code}` });
         }
         conn.end();
       });
     });
   });
   conn.on("error", (err) => {
-    const prev = sshExportJobs.get(jobId);
     const error = keyRefused
       ? `The SSH host key of ${sshHost} has changed. XenMan did not connect. An admin can review it in Settings → Pools.`
       : err.message;
-    sshExportJobs.set(jobId, { status: "failure", error, startedAt: prev?.startedAt ?? Date.now(), finishedAt: Date.now() });
+    settleExportJob(jobId, { status: "failure", error });
   });
   conn.connect({
     host: sshHost,
@@ -857,6 +861,8 @@ const ADMIN_ONLY_ACTIONS = new Set([
   "network_create", "network_update", "network_destroy", "network_configure_ip", "network_management_change",
   "host_console", "host_evacuate", "host_disable", "host_enable",
   "host_maintenance_enter", "host_maintenance_exit",
+  // Switching a server off or restarting it: the Power menu, as admin-only as disabling it.
+  "host_shutdown", "host_reboot",
   // A new pool coordinator: with maintenance mode, as XenCenter, or on its own.
   "pool_designate_coordinator",
   "host_restart_toolstack",
@@ -886,6 +892,42 @@ function exportDirOf(v: unknown): string | null {
   const dir = v.trim().replace(/\/+$/, "");
   if (!/^\/[A-Za-z0-9._ \/-]*$/.test(dir) || dir.split("/").includes("..")) return null;
   return dir;
+}
+
+/**
+ * Where an operator may export to on the host: below a mount point (a backup
+ * share, an SR) -- not anywhere root can write on the control domain. An
+ * administrator, who may open the host's console anyway, is not limited.
+ */
+const OPERATOR_EXPORT_ROOTS = ["/mnt/", "/media/", "/run/sr-mount/", "/var/run/sr-mount/"];
+
+function exportDirFor(role: string, v: unknown): { dir: string } | { error: string } {
+  const dir = exportDirOf(v);
+  if (!dir) return { error: "The export directory must be an absolute path of letters, digits, spaces and . _ - /" };
+  if (role !== "admin" && !OPERATOR_EXPORT_ROOTS.some((r) => dir.startsWith(r) && dir.length > r.length)) {
+    return { error: `Export to a directory below ${OPERATOR_EXPORT_ROOTS.slice(0, 3).join(", ")} (a mounted share or storage repository)` };
+  }
+  return { dir };
+}
+
+/**
+ * The export command on the host. For an operator, only into a mounted file
+ * system other than the control domain's own: a share not mounted would
+ * otherwise fill the host's root file system.
+ */
+function exportCommand(role: string, dir: string, xe: string): string {
+  if (role === "admin") return xe;
+  const d = shellQuote(dir);
+  return `[ -d ${d} ] && [ "$(stat -c %d ${d})" != "$(stat -c %d /)" ] || { echo ${shellQuote(`${dir} is not a mounted file system on this host`)} >&2; exit 3; }; ${xe}`;
+}
+
+/** The status of an SSH export, for whoever started it, while they may still reach its pool. */
+function exportJobFor(auth: { sub: string; role: UserRole }, jobId: unknown): SshExportJob | null {
+  const job = typeof jobId === "string" ? sshExportJobs.get(jobId) : undefined;
+  if (!job || !job.poolId || !job.actor) return null;
+  if (job.actor.toLowerCase() !== auth.sub.toLowerCase() && auth.role !== "admin") return null;
+  if (!mayAccessHost(auth, job.poolId)) return null;
+  return job;
 }
 /** A word for sh: in single quotes, which nothing inside can end. */
 const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -1683,7 +1725,7 @@ async function dispatch(request: NextRequest) {
           return NextResponse.json({ available: false });
         }
         result.url = reachableUrl(poolOfSession, result.url);
-        grantConsole(sessionRef, result.url);
+        grantConsole(sessionRef, result.url, "host");
         return NextResponse.json({
           available: true,
           url: result.url,
@@ -1698,18 +1740,6 @@ async function dispatch(request: NextRequest) {
 
       case "host_enable": {
         await hostEnable(host, port, useSsl, sessionRef, hostRef);
-        return NextResponse.json({ success: true });
-      }
-
-      case "host_add_other_config": {
-        const { key, value: val } = body;
-        await hostAddToOtherConfig(host, port, useSsl, sessionRef, hostRef, key, val);
-        return NextResponse.json({ success: true });
-      }
-
-      case "host_remove_other_config": {
-        const { key } = body;
-        await hostRemoveFromOtherConfig(host, port, useSsl, sessionRef, hostRef, key);
         return NextResponse.json({ success: true });
       }
 
@@ -1763,7 +1793,8 @@ async function dispatch(request: NextRequest) {
 
       case "host_maintenance_job_status": {
         const job = getMaintenanceJob(String(body.jobId ?? ""));
-        if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
+        // Only for the pool this session belongs to, as the other job status actions.
+        if (!job || job.poolId !== lookupSession(sessionRef)?.hostId) return NextResponse.json({ error: "Job not found" }, { status: 404 });
         return NextResponse.json({ job });
       }
 
@@ -2916,10 +2947,9 @@ async function dispatch(request: NextRequest) {
           return NextResponse.json({ error: "Host not found" }, { status: 404 });
         }
         if (!isUuid(vdiUuid)) return NextResponse.json({ error: "Not a disk UUID" }, { status: 400 });
-        const vdiDir = exportDirOf(vdiExportDir);
-        if (!vdiDir) {
-          return NextResponse.json({ error: "The export directory must be an absolute path of letters, digits, spaces and . _ - /" }, { status: 400 });
-        }
+        const vdiDirOk = exportDirFor(auth.role, vdiExportDir);
+        if ("error" in vdiDirOk) return NextResponse.json({ error: vdiDirOk.error }, { status: 400 });
+        const vdiDir = vdiDirOk.dir;
         const vdiTs = new Date().toISOString().replace(/[T:]/g, "-").replace(/\..+/, "");
         const vdiTargetPath = `${vdiDir}/${exportFileStem(vdiName)}_${vdiTs}.raw`;
         const vdiTarget = (typeof vdiSshHost === "string" && vdiSshHost) || vdiHost.address;
@@ -2927,15 +2957,15 @@ async function dispatch(request: NextRequest) {
         if (![...knownAddresses(vdiHost.id), ...natAddresses(vdiHost.id)].some((a) => a.toLowerCase() === vdiTarget.toLowerCase())) {
           return NextResponse.json({ error: `${vdiTarget} is not a known host of this pool` }, { status: 400 });
         }
-        const vdiJobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-        sshExportJobs.set(vdiJobId, { status: "running", targetPath: vdiTargetPath, startedAt: Date.now() });
+        const vdiJobId = crypto.randomUUID();
+        sshExportJobs.set(vdiJobId, { status: "running", targetPath: vdiTargetPath, startedAt: Date.now(), poolId: vdiHost.id, actor: auth.sub });
         runSshCommand(
           vdiHost.id,
           reachable(vdiHost.id, vdiTarget),
           vdiHost.sshPort || 22,
           vdiHost.username,
           vdiHost.password,
-          `xe vdi-export uuid=${vdiUuid} filename=${shellQuote(vdiTargetPath)} format=raw`,
+          exportCommand(auth.role, vdiDir, `xe vdi-export uuid=${vdiUuid} filename=${shellQuote(vdiTargetPath)} format=raw`),
           vdiJobId,
         );
         return NextResponse.json({ jobId: vdiJobId, targetPath: vdiTargetPath });
@@ -2953,10 +2983,9 @@ async function dispatch(request: NextRequest) {
           return NextResponse.json({ error: "Host not found" }, { status: 404 });
         }
         if (!isUuid(vmUuid)) return NextResponse.json({ error: "Not a VM UUID" }, { status: 400 });
-        const dir = exportDirOf(exportDir);
-        if (!dir) {
-          return NextResponse.json({ error: "The export directory must be an absolute path of letters, digits, spaces and . _ - /" }, { status: 400 });
-        }
+        const dirOk = exportDirFor(auth.role, exportDir);
+        if ("error" in dirOk) return NextResponse.json({ error: dirOk.error }, { status: 400 });
+        const dir = dirOk.dir;
         const ts = new Date().toISOString().replace(/[T:]/g, "-").replace(/\..+/, "");
         const targetPath = `${dir}/${exportFileStem(vmName)}_${ts}.xva`;
         const exportTarget = (typeof sshHost === "string" && sshHost) || exportHost.address;
@@ -2964,25 +2993,31 @@ async function dispatch(request: NextRequest) {
         if (![...knownAddresses(exportHost.id), ...natAddresses(exportHost.id)].some((a) => a.toLowerCase() === exportTarget.toLowerCase())) {
           return NextResponse.json({ error: `${exportTarget} is not a known host of this pool` }, { status: 400 });
         }
-        const jobId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
-        sshExportJobs.set(jobId, { status: "running", targetPath, startedAt: Date.now() });
+        const jobId = crypto.randomUUID();
+        sshExportJobs.set(jobId, { status: "running", targetPath, startedAt: Date.now(), poolId: exportHost.id, actor: auth.sub });
         runSshCommand(
           exportHost.id,
           reachable(exportHost.id, exportTarget),
           exportHost.sshPort || 22,
           exportHost.username,
           exportHost.password,
-          `xe vm-export vm=${vmUuid} filename=${shellQuote(targetPath)}`,
+          exportCommand(auth.role, dir, `xe vm-export vm=${vmUuid} filename=${shellQuote(targetPath)}`),
           jobId,
         );
         return NextResponse.json({ jobId, targetPath });
       }
 
       case "vm_export_status": {
-        const { jobId: statusJobId } = body;
-        const job = sshExportJobs.get(statusJobId as string);
+        // Only whoever started it (or an admin), while they may still reach its pool.
+        const job = exportJobFor(auth, body.jobId);
         if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
-        return NextResponse.json(job);
+        return NextResponse.json({
+          status: job.status,
+          error: job.error,
+          targetPath: job.targetPath,
+          startedAt: job.startedAt,
+          finishedAt: job.finishedAt,
+        });
       }
 
       case "vm_snapshots": {

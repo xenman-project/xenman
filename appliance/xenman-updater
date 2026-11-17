@@ -279,17 +279,27 @@ fi
 
 if [ $# -ge 1 ]; then
   PACKAGE="$1"
+  case "${PACKAGE}" in
+    *..*) fail "package path must not contain .." ;;
+  esac
+  [ -f "${PACKAGE}" ] || fail "no such package: ${PACKAGE}"
 else
-  [ -f "${TRIGGER_FILE}" ] || { echo "xenman-updater: nothing to do"; exit 0; }
-  PACKAGE="${UPDATE_DIR}/$(cat "${TRIGGER_FILE}")"
+  # The trigger and the package sit in a directory XenMan can write: they are
+  # untrusted input. A symlink there would have root read whatever it points
+  # at -- and an error message naming what it read would hand that to XenMan
+  # (status.json, the audit log, the journal). So: plain files only, and the
+  # trigger has to say exactly what the web interface writes, which is never
+  # repeated back.
+  [ -e "${TRIGGER_FILE}" ] || [ -L "${TRIGGER_FILE}" ] || { echo "xenman-updater: nothing to do"; exit 0; }
+  if [ -L "${TRIGGER_FILE}" ] || [ ! -f "${TRIGGER_FILE}" ]; then
+    fail "the update trigger is not a plain file"
+  fi
+  [ "$(head -c 64 "${TRIGGER_FILE}" | tr -d '\r\n')" = "pending.xenup" ] || fail "the update trigger does not name the uploaded package"
+  PACKAGE="${STAGED_PACKAGE}"
+  if [ -L "${PACKAGE}" ] || [ ! -f "${PACKAGE}" ]; then
+    fail "no uploaded package to install"
+  fi
 fi
-
-# The trigger names a file inside UPDATE_DIR and nothing else; the web interface
-# writes it, so it is treated as untrusted input.
-case "${PACKAGE}" in
-  *..*) fail "package path must not contain .." ;;
-esac
-[ -f "${PACKAGE}" ] || fail "no such package: ${PACKAGE}"
 [ -f "${RELEASE_KEY}" ] || fail "no release key at ${RELEASE_KEY} -- updates are disabled"
 
 # Everything below works on a private copy. The original sits in a directory

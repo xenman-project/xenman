@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
+import { CROSS_SITE_ERROR, crossSiteRequest } from "@/lib/request-origin";
 
 const PUBLIC_PATHS = [
   "/login",
@@ -21,6 +22,12 @@ const PUBLIC_PATHS = [
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Anything that changes something only from XenMan's own pages (CSRF) --
+  // the sign-in itself included, so no other site can sign a browser in.
+  if (pathname.startsWith("/api/") && crossSiteRequest(request)) {
+    return NextResponse.json({ error: CROSS_SITE_ERROR }, { status: 403 });
+  }
 
   // Allow public paths
   if (

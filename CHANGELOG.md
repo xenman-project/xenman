@@ -9,6 +9,18 @@ section of the version it leads to.
 ### Added
 - **Sign in with Microsoft Entra ID.** Under Settings > Security an administrator enters the app registration (tenant ID, client ID, client secret) and XenMan's address; the sign-in page then offers **Sign in with Microsoft**. The role comes from the app roles `XenMan.Admin`, `XenMan.Operator` and `XenMan.Viewer` at every sign-in; someone without one does not get in. XenMan creates the account at the first sign-in; pool access is still given in XenMan. MFA is left to Entra ID, so XenMan's two-factor code is not asked of these accounts. Password sign-in can be left to administrators only, as the way in when Entra ID is down. XenMan checks the ID token itself (signature against the tenant's keys, issuer, audience, tenant, nonce, PKCE), with no new dependency. The client secret is stored encrypted. See the README for setting up the app registration.
 
+### Security
+Fixes from a security review of XenMan.
+- **Operators could restart or shut down a XenServer host** through the API, although the Power menu is shown to administrators only. Both are now for administrators only, as disabling a host already was.
+- **Operators could set any key in a host's `other_config`** through two API actions the interface never used. They are removed.
+- **An operator's SSH export could write anywhere on the host as root**, for example filling the control domain's file system. Operators now export below `/mnt`, `/media` or an SR's mount point, and only into a mounted file system; administrators as before. An export's status is only shown to whoever started it and to administrators.
+- **A console that was open stayed open** after signing out, losing the pool, being made an operator (for a host's own console) or being deleted, and such a user could open a console again from an earlier session. Consoles are now checked when they open and every half minute while open.
+- **Requests from other sites (CSRF).** Beyond the SameSite cookie, XenMan now refuses any request that changes something unless it comes from its own pages (`Sec-Fetch-Site`, else `Origin`). This also covers the sign-in itself and requests from another subdomain or port of the same host.
+- **A WebSocket upgrade to any other path was never answered.** Enough such connections, without signing in, filled XenMan's connection limit until it restarted. They are now answered and closed.
+- **The appliance's updater followed a symbolic link at its trigger file** and named what it read in its error message, which XenMan could read. The trigger and the uploaded package now have to be plain files, the trigger has to name the uploaded package, and nothing from it is repeated back.
+- **The user list sent administrators the links of password resets** other users had asked for. It no longer does.
+- nodemailer 10.3.1 and ws 8.22.1, which fix known issues in both.
+
 ## [1.0.4] - 2026-11-16
 
 ### Added

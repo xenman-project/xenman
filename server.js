@@ -162,8 +162,51 @@ function signedInUser(token) {
   const role = user.role || "admin";
   const required = policy && (policy.require === "all" || (policy.require === "admins" && role === "admin"));
   const tfe = Boolean(required && !user.totp && !user.sso);
-  return { sub: user.username, role, pwc: Boolean(payload.pwc || user.mustChangePassword), tfe };
+  const pools = Array.isArray(user.pools) ? user.pools : [];
+  return { sub: user.username, role, pwc: Boolean(payload.pwc || user.mustChangePassword), tfe, pools };
 }
+
+// --- Who may keep a console ---
+// Asked when a console opens and again every half minute while it is open: a
+// console takes keyboard and mouse, so signing out, losing the role or the
+// pool, or the account's removal ends it -- not only the next one. As
+// lib/xen-sessions.ts: a binding untouched for a day is gone; a host's own
+// console (dom0) is for administrators; other users only reach the pools
+// granted to them (lib/pool-access.ts).
+const XEN_SESSION_IDLE_MS = 24 * 60 * 60 * 1000;
+const CONSOLE_RECHECK_MS = Number(process.env.XENMAN_CONSOLE_RECHECK_MS) || 30 * 1000;
+
+function consoleRefusal(token, req) {
+  const user = token ? signedInUser(token) : null;
+  if (!user || user.pwc || user.tfe) return "Signed out";
+  if (user.role !== "admin" && user.role !== "operator") return "Not allowed";
+  const params = new URL(req.url, "http://localhost").searchParams;
+  const sessionId = params.get("sessionId");
+  const consoleUrl = params.get("consoleUrl");
+  // Left to the console proxy, which says what is missing.
+  if (!sessionId || !consoleUrl) return null;
+  const bound = globalThis._xenSessions && globalThis._xenSessions.get(sessionId);
+  if (!bound || String(bound.actor).toLowerCase() !== user.sub.toLowerCase()) return "Unknown session";
+  if (Date.now() - bound.lastUsed > XEN_SESSION_IDLE_MS) return "Unknown session";
+  if (bound.hostConsoles && bound.hostConsoles.has(consoleUrl) && user.role !== "admin") return "Not allowed";
+  if (user.role !== "admin" && !user.pools.includes(bound.hostId)) return "Not allowed";
+  return null;
+}
+
+/** The consoles open now, each checked again every CONSOLE_RECHECK_MS. */
+const openConsoles = new Set();
+setInterval(() => {
+  for (const c of openConsoles) {
+    const why = consoleRefusal(c.token, c.req);
+    if (!why) continue;
+    openConsoles.delete(c);
+    try {
+      c.ws.close(1008, why);
+    } catch {
+      // gone already
+    }
+  }
+}, CONSOLE_RECHECK_MS).unref();
 
 function getTokenFromCookies(cookieHeader) {
   if (!cookieHeader) return null;
@@ -329,12 +372,26 @@ function createUpgradeHandler(wss, transportOk) {
         socket.destroy();
         return;
       }
+      // Still this user's pool, and a host's own console only for an administrator.
+      if (consoleRefusal(token, req)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       // The actor comes from the verified token, never from the request: the
       // viewer list is only worth anything if the names in it are trustworthy.
-      wss.handleUpgrade(req, socket, head, (ws) =>
-        handleVncUpgrade(ws, req, payload.sub),
-      );
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        const open = { ws, token, req };
+        openConsoles.add(open);
+        ws.on("close", () => openConsoles.delete(open));
+        handleVncUpgrade(ws, req, payload.sub);
+      });
+      return;
     }
+    // Nothing else here is a WebSocket: answered and closed, never left open
+    // -- held sockets would count against the connection limit for good.
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
   };
 }
 

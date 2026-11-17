@@ -34,6 +34,11 @@ export interface XenSessionEntry {
    * cannot point it at any other address.
    */
   consoles?: Set<string>;
+  /**
+   * Those of them that are a host's own console (the control domain, a root
+   * shell): server.js lets only administrators open these, also later.
+   */
+  hostConsoles?: Set<string>;
 }
 
 const g = globalThis as typeof globalThis & {
@@ -71,10 +76,11 @@ export function lookupSession(sessionRef: string): XenSessionEntry | null {
 }
 
 /** Lets the console proxy connect to this console location on this session. */
-export function grantConsole(sessionRef: string, location: string): void {
+export function grantConsole(sessionRef: string, location: string, kind: "vm" | "host" = "vm"): void {
   const entry = sessions.get(sessionRef);
   if (!entry) return;
   (entry.consoles ??= new Set()).add(location);
+  if (kind === "host") (entry.hostConsoles ??= new Set()).add(location);
 }
 
 export function removeSession(sessionRef: string): void {
