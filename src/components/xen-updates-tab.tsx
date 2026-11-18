@@ -138,8 +138,11 @@ const TYPE_TEXT: Record<string, string> = {
   Foundational: "Foundational",
 };
 
+/** "weekly" as a status: "Weekly". */
+const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 function when(iso: string | null, dateTime: (d: string) => string): string {
-  return iso ? dateTime(iso) : "never";
+  return iso ? dateTime(iso) : "Never";
 }
 
 /**
@@ -178,13 +181,13 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
         const json = await res.json().catch(() => ({}));
         setSync(json.sync ?? null);
         if (!res.ok) {
-          setError(json.error ?? "The update state could not be read");
+          setError(json.error ?? "Update information could not be retrieved.");
           return;
         }
         setError(null);
         setData(json.updates);
       } catch {
-        setError("XenMan did not answer");
+        setError("No response from XenMan.");
       } finally {
         setLoading(false);
       }
@@ -233,7 +236,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
       body: JSON.stringify({ hostId, action: "sync" }),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) setError(json.error ?? "The check could not be started");
+    if (!res.ok) setError(json.error ?? "The check for updates could not be started.");
     else setSync(json.sync);
   }
 
@@ -254,20 +257,20 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
               <CardTitle className="text-base">XenServer Updates</CardTitle>
               <CardDescription>
                 {data?.pool.channel
-                  ? `From the update channel ${data.pool.channel.name || data.pool.channel.url}`
-                  : "From the pool's update channel"}
+                  ? `Update channel: ${data.pool.channel.name || data.pool.channel.url}`
+                  : "Pool update channel"}
               </CardDescription>
             </div>
             {isAdmin && (
               <div className="flex flex-wrap gap-2 sm:justify-end">
                 <Button size="sm" variant="outline" onClick={checkNow} disabled={running || jobRunning}>
                   <RefreshCw className={`mr-2 h-4 w-4 ${running ? "animate-spin" : ""}`} />
-                  {running ? "Checking…" : "Check now"}
+                  {running ? "Checking" : "Check for Updates"}
                 </Button>
                 {data && due && (
                   <Button size="sm" onClick={() => setDialogOpen(true)} disabled={running || jobRunning}>
                     <Download className="mr-2 h-4 w-4" />
-                    {hostRef ? "Update this host" : "Update pool"}
+                    Install Updates
                   </Button>
                 )}
               </div>
@@ -278,29 +281,29 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
           {data && (
             <div className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
               <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">Last synchronised</span>
+                <span className="text-muted-foreground">Last synchronized</span>
                 <span>{when(data.pool.lastSync, dates.dateTime)}</span>
               </div>
               <div className="flex justify-between gap-4">
-                <span className="text-muted-foreground">Automatic sync</span>
-                <span>{data.pool.autoSync.enabled ? data.pool.autoSync.frequency ?? "on" : "off"}</span>
+                <span className="text-muted-foreground">Automatic synchronization</span>
+                <span>{data.pool.autoSync.enabled ? capitalize(data.pool.autoSync.frequency ?? "enabled") : "Disabled"}</span>
               </div>
             </div>
           )}
           {running && (
             <p className="flex items-center gap-2 text-muted-foreground">
-              <RefreshCw className="h-4 w-4 animate-spin" /> Fetching the update list from the channel — this can take a few minutes.
+              <RefreshCw className="h-4 w-4 animate-spin" /> Synchronizing with the update channel. This may take several minutes.
             </p>
           )}
-          {sync?.state === "failed" && sync.error && <Notice tone="error" text={`The last check failed: ${sync.error}`} />}
+          {sync?.state === "failed" && sync.error && <Notice tone="error" text={`The last check for updates failed: ${sync.error}`} />}
           {data?.problem && <Notice tone="warn" text={data.problem} />}
           {data?.pool.haEnabled && (
-            <Notice tone="warn" text="High availability is on. Installing updates needs it switched off for the duration." />
+            <Notice tone="warn" text="High Availability is enabled on this pool. Disable HA before installing updates." />
           )}
           {error && <Notice tone="error" text={error} />}
           {!data && !error && loading && (
             <p className="flex items-center gap-2 text-muted-foreground">
-              <RefreshCw className="h-4 w-4 animate-spin" /> Asking the pool…
+              <RefreshCw className="h-4 w-4 animate-spin" /> Loading
             </p>
           )}
         </CardContent>
@@ -311,9 +314,9 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
       {data && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{hostRef ? "This host" : "Hosts"}</CardTitle>
+            <CardTitle className="text-base">{hostRef ? "Host" : "Hosts"}</CardTitle>
             <CardDescription>
-              {hostRef ? "What this host lacks and what installing it needs" : "Updated in this order, the coordinator first"}
+              {hostRef ? "Update status of this host" : "Hosts are updated in this order, starting with the pool coordinator."}
             </CardDescription>
           </CardHeader>
           <CardContent className="p-0 sm:p-0">
@@ -326,15 +329,15 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                       {h.name}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {h.version || "unknown version"} · last updated {when(h.lastUpdated, dates.dateTime)}
+                      {h.version || "Unknown version"} · Last updated: {when(h.lastUpdated, dates.dateTime)}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
                     {!h.live ? (
-                      <Badge variant="outline" className="border-red-600/40 text-red-700 dark:text-red-400">offline</Badge>
+                      <Badge variant="outline" className="border-red-600/40 text-red-700 dark:text-red-400">Offline</Badge>
                     ) : h.updates.length === 0 && h.pending.length === 0 ? (
                       <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
-                        <CheckCircle2 className="h-4 w-4" /> up to date
+                        <CheckCircle2 className="h-4 w-4" /> Up to date
                       </span>
                     ) : (
                       <>
@@ -348,7 +351,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                             }
                           >
                             {h.updates.length} update{h.updates.length === 1 ? "" : "s"}
-                            {h.highSeverity > 0 && ` · ${h.highSeverity} high`}
+                            {h.highSeverity > 0 && ` · ${h.highSeverity} high severity`}
                           </Badge>
                         )}
                         {h.updates.length > 0 &&
@@ -360,12 +363,12 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                         {h.pending.length > 0 && (
                           <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-700 dark:text-amber-400">
                             <RotateCcw className="h-3 w-3" />
-                            pending: {[...new Set(h.pending.map(pendingText))].join(", ")}
+                            Pending: {[...new Set(h.pending.map(pendingText))].join(", ")}
                           </Badge>
                         )}
                       </>
                     )}
-                    {!h.enabled && h.live && <Badge variant="outline">maintenance</Badge>}
+                    {!h.enabled && h.live && <Badge variant="outline">Maintenance mode</Badge>}
                   </div>
                 </div>
               ))}
@@ -380,12 +383,12 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
             <CardTitle className="text-base">
               Available updates {updates.length > 0 && <span className="text-muted-foreground">({updates.length})</span>}
             </CardTitle>
-            <CardDescription>Newest first. Select one for details.</CardDescription>
+            <CardDescription>Select an update to view details.</CardDescription>
           </CardHeader>
           <CardContent className="p-0 sm:p-0">
             {updates.length === 0 ? (
               <p className="px-4 pb-4 text-sm text-muted-foreground sm:px-6 sm:pb-6">
-                {data.problem ? "No list available." : "Nothing to install."}
+                {data.problem ? "Update information is not available." : "No updates available."}
               </p>
             ) : (
               <div className="divide-y text-sm">
@@ -410,7 +413,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                         <div className="flex basis-full flex-wrap gap-1 pl-7 sm:basis-auto sm:shrink-0 sm:justify-end sm:pl-0">
                           {u.severity === "High" && (
                             <Badge variant="outline" className="gap-1 border-red-600/40 text-red-700 dark:text-red-400">
-                              <ShieldAlert className="h-3 w-3" /> high
+                              <ShieldAlert className="h-3 w-3" /> High
                             </Badge>
                           )}
                           {u.type && <Badge variant="secondary" className="font-normal">{TYPE_TEXT[u.type] ?? u.type}</Badge>}
@@ -422,7 +425,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                           {u.description && <p className="whitespace-pre-wrap text-muted-foreground">{u.description}</p>}
                           {!hostRef && (
                             <p className="text-xs">
-                              <span className="text-muted-foreground">Missing on: </span>
+                              <span className="text-muted-foreground">Not installed on: </span>
                               {u.hosts.map(nameOf).join(", ")}
                             </p>
                           )}
@@ -470,12 +473,12 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
   const title =
     job.state === "running"
       ? stopping
-        ? "Stopping the update…"
+        ? "Stopping update"
         : waiting
-          ? "Update paused — attention needed"
+          ? "Update paused: action required"
           : "Update in progress"
       : job.state === "done"
-        ? "Update finished"
+        ? "Update completed"
         : job.state === "failed"
           ? "Update failed"
           : job.state === "stopped"
@@ -490,7 +493,7 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
       body: JSON.stringify({ action: "stop", id: job.id }),
     }).catch(() => null);
     const json = await res?.json().catch(() => ({}));
-    if (!res?.ok) setStopError(json?.error ?? "The update could not be stopped");
+    if (!res?.ok) setStopError(json?.error ?? "The update could not be stopped.");
     else if (json.job) {
       onChanged(json.job);
       refreshUpdateBadges();
@@ -505,7 +508,7 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
       body: JSON.stringify({ action: "restart-coordinator", id: job.id }),
     }).catch(() => null);
     const json = await res?.json().catch(() => ({}));
-    if (!res?.ok) setRestartError(json?.error ?? "The update could not go on");
+    if (!res?.ok) setRestartError(json?.error ?? "The update could not be resumed.");
     else if (json.job) onChanged(json.job);
   }
   // Steps grouped by host, in the order they run.
@@ -537,15 +540,15 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
             </CardTitle>
             <CardDescription>
               Started by {job.by} on {dates.dateTime(job.createdAt)}
-              {job.stopRequested && ` · stop requested by ${job.stopRequested.by} at ${dates.time(job.stopRequested.at)}`}
-              {job.finishedAt && ` · finished ${dates.time(job.finishedAt)}`}
-              {job.state === "running" && !stopping && " · continues if you close this page"}
+              {job.stopRequested && ` · Stop requested by ${job.stopRequested.by} at ${dates.time(job.stopRequested.at)}`}
+              {job.finishedAt && ` · Completed at ${dates.time(job.finishedAt)}`}
+              {job.state === "running" && !stopping && " · Runs in the background"}
             </CardDescription>
           </div>
           {isAdmin && job.state === "running" && (
             <Button size="sm" variant="outline" className="shrink-0 self-start" onClick={() => setConfirmStop(true)} disabled={stopping}>
               {stopping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Square className="mr-2 h-4 w-4" />}
-              {stopping ? "Stopping…" : "Stop"}
+              {stopping ? "Stopping" : "Stop"}
             </Button>
           )}
         </div>
@@ -560,10 +563,10 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
             {isAdmin ? (
               <Button size="sm" onClick={() => setConfirmRestart(true)}>
                 <RotateCcw className="mr-2 h-4 w-4" />
-                Restart the coordinator&apos;s toolstack and continue
+                Restart Toolstack and Continue
               </Button>
             ) : (
-              <p className="text-xs">An administrator can let the update go on, or stop it.</p>
+              <p className="text-xs">An administrator must resume or stop the update.</p>
             )}
             {restartError && <Notice tone="error" text={restartError} />}
           </div>
@@ -596,8 +599,7 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
         ))}
         {stopping && (
           <p className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Stopping after the current step — an install, a restart or a vGPU VM on the move is
-            finished first.
+            <Loader2 className="h-4 w-4 animate-spin" /> The update stops after the current step.
           </p>
         )}
         {stopError && <Notice tone="error" text={stopError} />}
@@ -609,33 +611,30 @@ function JobProgress({ job, isAdmin, onChanged }: { job: Job; isAdmin: boolean; 
       <AlertDialog open={confirmStop} onOpenChange={setConfirmStop}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Stop the update?</AlertDialogTitle>
+            <AlertDialogTitle>Stop Update?</AlertDialogTitle>
             <AlertDialogDescription>
-              XenMan stops at the next safe point. An install or a host restart already under way is finished first, and so is
-              moving a VM with a vGPU; other VM moves are cancelled and XenServer rolls them back. The host being worked on leaves
-              maintenance mode unless it still needs a restart. Hosts not reached yet stay as they are, and VMs already moved
-              stay where they are.
+              The update stops after the current step. Installations, host restarts and vGPU migrations in progress are
+              completed; other VM migrations are cancelled. Hosts not yet updated remain unchanged.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep going</AlertDialogCancel>
-            <AlertDialogAction onClick={stop}>Stop the update</AlertDialogAction>
+            <AlertDialogCancel>Continue</AlertDialogCancel>
+            <AlertDialogAction onClick={stop}>Stop Update</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={confirmRestart} onOpenChange={setConfirmRestart}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Restart the toolstack of {job.attention?.coordinatorName}?</AlertDialogTitle>
+            <AlertDialogTitle>Restart Toolstack on {job.attention?.coordinatorName}?</AlertDialogTitle>
             <AlertDialogDescription>
-              XenServer then lets go of the evacuation that did not end, and the update goes on. VMs keep running. XenCenter,
-              Workload Balancing, Citrix and every other tool connected to the pool lose their connection for about a minute;
-              XenMan reconnects by itself.
+              This clears the incomplete evacuation and resumes the update. VMs continue to run. Connections to the pool, including
+              XenCenter and Workload Balancing, are interrupted for approximately one minute.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Not now</AlertDialogCancel>
-            <AlertDialogAction onClick={restartCoordinator}>Restart and continue</AlertDialogAction>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={restartCoordinator}>Restart and Continue</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

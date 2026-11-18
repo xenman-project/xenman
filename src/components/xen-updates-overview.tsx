@@ -89,7 +89,7 @@ export function XenUpdatesOverview() {
                 <span className="ml-auto flex flex-wrap items-center gap-1.5">
                   {p.jobRunning && (
                     <Badge variant="outline" className="gap-1 border-sky-500/40 text-sky-600 dark:text-sky-400">
-                      <Loader2 className="h-3 w-3 animate-spin" /> update running
+                      <Loader2 className="h-3 w-3 animate-spin" /> Update in progress
                     </Badge>
                   )}
                   {p.unknown ? (
@@ -108,20 +108,20 @@ export function XenUpdatesOverview() {
                   ) : (
                     !p.restartPending && (
                       <Badge variant="outline" className="gap-1 border-green-600/40 text-green-700 dark:text-green-500">
-                        <CheckCircle2 className="h-3 w-3" /> up to date
+                        <CheckCircle2 className="h-3 w-3" /> Up to date
                       </Badge>
                     )
                   )}
                   {p.restartPending && (
                     <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-700 dark:text-amber-400">
-                      <RotateCcw className="h-3 w-3" /> restart pending
+                      <RotateCcw className="h-3 w-3" /> Restart pending
                     </Badge>
                   )}
                 </span>
                 <span className="basis-full text-xs text-muted-foreground">
                   {p.unknown
-                    ? "The pool did not answer, or was never checked."
-                    : `Checked ${p.lastSync ? dates.dateTime(p.lastSync) : "never"}`}
+                    ? "No update information. The pool did not respond or has not been checked."
+                    : `Last synchronized: ${p.lastSync ? dates.dateTime(p.lastSync) : "Never"}`}
                 </span>
               </button>
             </li>

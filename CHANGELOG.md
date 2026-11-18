@@ -22,6 +22,9 @@ Fixes from a security review of XenMan.
 - **The user list sent administrators the links of password resets** other users had asked for. It no longer does.
 - nodemailer 10.3.1 and ws 8.22.1, which fix known issues in both.
 
+### Changed
+- The Updates tab, the Install Updates dialog and the update progress use shorter, XenCenter-style wording (for example "Install Updates", "Evacuate host", "Exit maintenance mode").
+
 ## [1.0.4] - 2026-11-16
 
 ### Added

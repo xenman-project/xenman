@@ -81,7 +81,7 @@ export function XenUpdatesBadge({ hostId }: { hostId: string }) {
   const high = s.high > 0;
   const text = s.updates > 0
     ? `${s.updates} XenServer update${s.updates === 1 ? "" : "s"} for ${s.hostsBehind} host${s.hostsBehind === 1 ? "" : "s"}${high ? `, ${s.high} high severity` : ""}`
-    : "A host waits for a restart to finish its updates";
+    : "A host restart is pending to complete installed updates";
   return (
     <Tooltip>
       <TooltipTrigger asChild>

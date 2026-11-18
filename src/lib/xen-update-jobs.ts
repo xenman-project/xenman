@@ -270,7 +270,7 @@ export interface Plan {
 
 /** The note for a VM without VM Tools that had to be switched off the hard way. */
 export function hardNote(name: string): string {
-  return `${name} did not shut down by itself and was switched off the hard way before its restart.`;
+  return `${name} did not shut down cleanly and was forced off before the restart.`;
 }
 
 /** VMs this job shut down and has not started again, as "name (on host)". */
@@ -280,7 +280,7 @@ export function leftOff(job: Job): string[] {
 
 function leftOffNote(job: Job): string | null {
   const off = leftOff(job);
-  return off.length ? `Shut down by this update and not started again: ${off.join(", ")}. Start them once their host is back.` : null;
+  return off.length ? `VMs shut down by this update and not restarted: ${off.join(", ")}. Start them when their host is available.` : null;
 }
 
 // ─── storage ─────────────────────────────────────────────────────────────────
@@ -301,7 +301,7 @@ function readJob(file: string): Job | null {
     if (job.state === "running" && !active.has(job.id)) {
       job.state = "interrupted";
       job.finishedAt = job.finishedAt ?? new Date().toISOString();
-      job.error = "XenMan restarted while this was running. Check the hosts: one may still be in maintenance mode.";
+      job.error = "The update was interrupted because XenMan restarted. Check the hosts: a host may still be in maintenance mode.";
       const off = leftOffNote(job);
       if (off) job.notes.push(off);
       for (const s of job.steps) if (s.state === "running") s.state = "failed";
@@ -394,35 +394,37 @@ function stepsFor(h: HostUpdateState, o: JobOptions, vgpus = 0, noTools = 0): Om
   const evacuate =
     n.postReboot || (o.automatic && n.preReboot) || (n.install && h.guidance.includes("EvacuateHost")) || o.evacuateAlways;
   const shutDown = evacuate && o.vgpuShutdown && vgpus > 0;
-  const steps = [s("maintenance", evacuate ? "Enter maintenance mode" : "Disable the host (its VMs keep running)")];
+  const steps = [s("maintenance", evacuate ? "Enter maintenance mode" : "Disable host")];
   if (shutDown) steps.push(s("vgpu-off", vgpuOffLabel(vgpus)));
   if (evacuate) {
     steps.push(
       s(
         "evacuate",
         noTools && o.noToolsRestart
-          ? `Move running VMs to other hosts — ${noTools} without the VM Tools: shut down and started there`
-          : "Move running VMs to other hosts",
+          ? `Evacuate host (${noTools} VM${noTools === 1 ? "" : "s"} without XenServer VM Tools restarted on another host)`
+          : "Evacuate host",
       ),
     );
   }
-  if (o.automatic && n.preReboot) steps.push(s("reboot", "Restart the host (still pending from an earlier update)"));
-  if (o.automatic && n.preToolstack) steps.push(s("toolstack", "Restart the toolstack (still pending from an earlier update)"));
+  if (o.automatic && n.preReboot) steps.push(s("reboot", "Restart host (pending from a previous update)"));
+  if (o.automatic && n.preToolstack) steps.push(s("toolstack", "Restart toolstack (pending from a previous update)"));
   if (n.install) steps.push(s("apply", `Install ${h.updates.length} update${h.updates.length === 1 ? "" : "s"}`));
-  if (o.automatic && n.postToolstack) steps.push(s("toolstack", "Restart the toolstack"));
-  if (o.automatic && n.postReboot) steps.push(s("reboot", "Restart the host"));
+  if (o.automatic && n.postToolstack) steps.push(s("toolstack", "Restart toolstack"));
+  if (o.automatic && n.postReboot) steps.push(s("reboot", "Restart host"));
   // A host still waiting for its restart stays in maintenance mode.
   const waitsForRestart = !o.automatic && n.postReboot;
-  if (!waitsForRestart) steps.push(s("enable", "Leave maintenance mode"));
+  if (!waitsForRestart) steps.push(s("enable", "Exit maintenance mode"));
   if (shutDown && !waitsForRestart) steps.push(s("vgpu-on", VGPU_ON));
-  if (steps.some((x) => x.kind === "evacuate") && o.moveVmsBack && !waitsForRestart) steps.push(s("vms-back", "Move the VMs back"));
+  if (steps.some((x) => x.kind === "evacuate") && o.moveVmsBack && !waitsForRestart) steps.push(s("vms-back", "Migrate VMs back"));
   return steps;
 }
 
-const vgpuOffLabel = (n: number) => `Shut down ${n === 1 ? "the VM" : `${n} VMs`} with a vGPU`;
-const VGPU_ON = "Start the VMs with a vGPU again";
+const vgpuOffLabel = (n: number) => `Shut down ${n} VM${n === 1 ? "" : "s"} with vGPUs`;
+const VGPU_ON = "Start VMs with vGPUs";
+/** Marks a skipped host's steps when they are tried again at the end; the job recognises them by it. */
+const RETRY_SUFFIX = " (retry)";
 
-const BACK_TO_HOMES = "Move back what is still away from its host";
+const BACK_TO_HOMES = "Migrate remaining VMs back to their original hosts";
 
 /**
  * A pool update moves a host's VMs back as soon as the host is done, before
@@ -527,7 +529,7 @@ async function evacuationProblems(s: PoolSession, hostRef: string, skip: Set<str
       const rec = await call<Record<string, unknown>>(s, "task.get_record", task).catch(() => null);
       const what = OPERATION_NAMES[op] ?? op;
       if (!rec || rec.status !== "pending") {
-        return { vm, name, text: `${name} (still marked as ${what}, though that ended)`, busy: false, stale: true };
+        return { vm, name, text: `${name} (completed operation still registered: ${what})`, busy: false, stale: true };
       }
       const progress = Number(rec.progress);
       const since = rec.created ? anyDate(rec.created) : null;
@@ -554,23 +556,23 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
   let hosts = u.hosts.filter(due);
   if (target !== "pool") {
     const one = u.hosts.find((h) => h.ref === target);
-    if (!one) blockers.push("This host is not in the pool.");
+    if (!one) blockers.push("The host is not a member of this pool.");
     else {
       const coordinator = u.hosts.find((h) => h.isCoordinator);
       if (!one.isCoordinator && coordinator && coordinator.updates.length > 0) {
-        blockers.push(`Update the coordinator ${coordinator.name} first — or the whole pool at once.`);
+        blockers.push(`Update the pool coordinator ${coordinator.name} first, or update the entire pool.`);
       }
       hosts = due(one) ? [one] : [];
     }
   }
   if (u.problem) blockers.push(u.problem);
-  if (!u.hash && hosts.some((h) => h.updates.length > 0)) blockers.push("No update list — check for updates first.");
-  if (hosts.length === 0 && !u.problem) blockers.push("Nothing to install.");
-  if (u.pool.haEnabled) blockers.push("High availability is on — switch it off for the update, as XenCenter would ask too.");
+  if (!u.hash && hosts.some((h) => h.updates.length > 0)) blockers.push("No update information is available. Check for updates first.");
+  if (hosts.length === 0 && !u.problem) blockers.push("No updates available.");
+  if (u.pool.haEnabled) blockers.push("High Availability is enabled on this pool. Disable HA before installing updates.");
   if (u.pool.wlbActive) {
-    warnings.push("Workload Balancing is paused for the update and resumed afterwards, so it does not move VMs while hosts are emptied and VMs brought back.");
+    warnings.push("Workload Balancing is paused during the update and resumed afterwards.");
   }
-  if (listJobs(hostId).some((j) => j.state === "running")) blockers.push("An update is already running on this pool.");
+  if (listJobs(hostId).some((j) => j.state === "running")) blockers.push("An update is already in progress on this pool.");
   for (const h of hosts) if (!h.live) blockers.push(`${h.name} is offline.`);
 
   const evacuating = hosts.filter((h) => stepsFor(h, o).some((x) => x.kind === "evacuate"));
@@ -584,18 +586,18 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
       const { stuck } = vgpu;
       if (stuck.length) {
         warnings.push(
-          `${stuck.join(", ")} cannot be migrated until shut down and started again: a failed vGPU migration left ${stuck.length === 1 ? "its" : "their"} vGPU pointing at a device on another host.`,
+          `${stuck.join(", ")} cannot be migrated until restarted, because a previous vGPU migration failed.`,
         );
       }
       vgpuVms = evacuating.reduce((n, h) => n + vgpusOn(h), 0);
       if (vgpuVms && o.vgpuShutdown) {
         const names = evacuating.flatMap((h) => (vgpu.vms.get(h.ref) ?? []).map((x) => x.name));
         warnings.push(
-          `${vgpuVms} VM${vgpuVms === 1 ? "" : "s"} with a vGPU ${vgpuVms === 1 ? "is" : "are"} shut down while ${vgpuVms === 1 ? "its" : "their"} host is updated and started again on it afterwards: ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}. Shutting down waits up to 10 minutes per VM, then switches it off.`,
+          `${vgpuVms} VM${vgpuVms === 1 ? "" : "s"} with vGPUs will be shut down during the host update and started afterwards: ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}. VMs that do not shut down within 10 minutes are forced off.`,
         );
       } else if (vgpuVms) {
         warnings.push(
-          `${vgpuVms} VM${vgpuVms === 1 ? "" : "s"} with a vGPU will be live-migrated, as XenCenter does — once the GPUs report their migration data. One whose migration fails is not tried again live: it is shut down and started on another host.`,
+          `${vgpuVms} VM${vgpuVms === 1 ? "" : "s"} with vGPUs will be live-migrated. If a migration fails, the VM is restarted on another host.`,
         );
       }
     } finally {
@@ -608,7 +610,7 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
   const skipFor = (h: HostUpdateState) => new Set(o.vgpuShutdown ? (vgpu.vms.get(h.ref) ?? []).map((x) => x.vm) : []);
   if (evacuating.length) {
     if (u.hosts.length < 2) {
-      blockers.push("The update restarts the host, and a pool with one host has nowhere to move its VMs. Shut them down first.");
+      blockers.push("The update requires a host restart, and no other host is available for running VMs. Shut down the VMs first.");
     } else {
       const s = await openPoolSession(hostId);
       try {
@@ -625,11 +627,11 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
             const names = listStuck(noTools).replace(/ \(no VM Tools\)/g, "");
             if (o.noToolsRestart) {
               warnings.push(
-                `VMs on ${h.name} have no VM Tools and cannot be live-migrated: ${names}. They are shut down and started again on another host — a short outage each${o.moveVmsBack ? ", and once more when moved back" : ""}.`,
+                `VMs on ${h.name} cannot be live-migrated because XenServer VM Tools are not installed: ${names}. These VMs will be restarted on another host.`,
               );
             } else {
               blockers.push(
-                `VMs on ${h.name} cannot be live-migrated, they have no XenServer VM Tools: ${names}. Let XenMan shut them down and start them on another host (switch above), or install the tools.`,
+                `VMs on ${h.name} cannot be live-migrated because XenServer VM Tools are not installed: ${names}. Install the tools, or enable the option to restart these VMs on another host.`,
               );
             }
           }
@@ -637,12 +639,12 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
           const stale = all.filter((x) => x.stale);
           if (busy.length) {
             warnings.push(
-              `VMs on ${h.name} are busy right now: ${listStuck(busy)}. When it is ${h.name}'s turn, XenMan waits for them (up to ${Math.round(BUSY_WAIT_MS / 60000)} minutes).`,
+              `VMs on ${h.name} have operations in progress: ${listStuck(busy)}. The update waits up to ${Math.round(BUSY_WAIT_MS / 60000)} minutes for them to complete.`,
             );
           }
           if (stale.length) {
             blockers.push(
-              `VMs on ${h.name} cannot be moved: ${listStuck(stale)}. XenServer still lists an operation whose task has ended; restarting the toolstack of ${h.name} clears it, the VMs keep running.`,
+              `VMs on ${h.name} cannot be migrated: ${listStuck(stale)}. Restart the toolstack on ${h.name} to clear the completed operations; VMs continue to run.`,
             );
           }
           const stuck = all.filter((x) => !x.busy && !x.stale && !x.noTools).map((x) => x.text);
@@ -654,12 +656,12 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
             .some((x) => !x.enabled && stepsFor(x, o).some((st) => st.kind === "enable"));
           // Hosts in maintenance mode that this plan leaves there.
           const staysDown = u.hosts.filter((x) => x.ref !== h.ref && !x.enabled && !hosts.includes(x)).map((x) => x.name);
-          const message = `VMs on ${h.name} cannot be moved to another host: ${stuck.slice(0, 5).join(", ")}${stuck.length > 5 ? ", …" : ""}`;
+          const message = `VMs on ${h.name} cannot be migrated to another host: ${stuck.slice(0, 5).join(", ")}${stuck.length > 5 ? ", …" : ""}`;
           const noHost = stuck.every((x) => x.includes("(NO_HOSTS_AVAILABLE)"));
           if (comesBack && noHost) {
-            warnings.push(`${message}. That is because a host before it is in maintenance mode; it is checked again when it is ${h.name}'s turn.`);
+            warnings.push(`${message}. Another host is in maintenance mode; the check is repeated when ${h.name} is updated.`);
           } else if (noHost && staysDown.length) {
-            blockers.push(`${message}. ${staysDown.join(", ")} ${staysDown.length === 1 ? "is" : "are"} in maintenance mode — take ${staysDown.length === 1 ? "it" : "them"} out of maintenance mode first.`);
+            blockers.push(`${message}. ${staysDown.join(", ")} ${staysDown.length === 1 ? "is" : "are"} in maintenance mode. Exit maintenance mode first.`);
           } else {
             blockers.push(message);
           }
@@ -672,20 +674,20 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
   for (const h of hosts) {
     const n = needs(h);
     if (n.install && n.pendingVmRestart) {
-      blockers.push(`${h.name} still waits for its VMs to be restarted after an earlier update; XenServer installs nothing new until then.`);
+      blockers.push(`${h.name} has VMs pending restart from a previous update. No further updates can be installed until they are restarted.`);
     }
     if (!o.automatic && n.install && (n.preReboot || n.preToolstack)) {
       blockers.push(
-        `${h.name} still waits for a ${n.preReboot ? "restart" : "toolstack restart"} from an earlier update, and XenServer installs nothing new until then. Allow automatic restarts, or restart it first.`,
+        `${h.name} has a pending ${n.preReboot ? "host restart" : "toolstack restart"} from a previous update. Enable automatic restarts, or restart the host first.`,
       );
     }
     if (!o.automatic && n.postReboot) {
       warnings.push(
-        `${h.name} needs a restart afterwards and stays in maintenance mode until you restart it.${o.vgpuShutdown && vgpusOn(h) ? " Its VMs with a vGPU stay shut down until then; start them afterwards." : ""}`,
+        `${h.name} requires a restart after the update and remains in maintenance mode until restarted.${o.vgpuShutdown && vgpusOn(h) ? " VMs with vGPUs remain shut down until then." : ""}`,
       );
     }
-    if (!o.automatic && n.postToolstack) warnings.push(`${h.name}: restart its toolstack afterwards.`);
-    if (n.vmRestart) warnings.push(`VMs on ${h.name} need a restart to use the update; XenMan does not restart VMs.`);
+    if (!o.automatic && n.postToolstack) warnings.push(`${h.name}: restart the toolstack after the update.`);
+    if (n.vmRestart) warnings.push(`VMs on ${h.name} must be restarted for the update to take effect.`);
   }
   return {
     updates: u,
@@ -736,7 +738,7 @@ export async function startJob(
     steps: [
       ...plan.hosts.flatMap((h) => h.steps.map((s) => ({ ...s, id: crypto.randomUUID(), state: "todo" as StepState }))),
       ...plan.finalSteps.map((label) => ({ id: crypto.randomUUID(), host: null, hostName: null, kind: "vms-back" as const, label, state: "todo" as StepState })),
-      { id: crypto.randomUUID(), host: null, hostName: null, kind: "refresh", label: "Refresh the update list", state: "todo" },
+      { id: crypto.randomUUID(), host: null, hostName: null, kind: "refresh", label: "Synchronize update information", state: "todo" },
     ],
     notes: plan.warnings,
     planNotes: plan.warnings.length,
@@ -788,7 +790,7 @@ class Conn {
       } catch (err) {
         // A host that came back with another certificate is not waited for.
         if (err instanceof CertMismatchError) throw err;
-        if (Date.now() > deadline) throw new Error("The pool did not come back in time");
+        if (Date.now() > deadline) throw new Error("The pool did not respond within the expected time");
         await sleep(POLL_MS);
       }
     }
@@ -832,7 +834,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     try {
       await c.call("pool.set_wlb_enabled", p, false);
     } catch (e) {
-      throw new Error(`Workload Balancing could not be paused for the update (${friendlyXapiError(e)}); nothing was changed`);
+      throw new Error(`Workload Balancing could not be paused (${friendlyXapiError(e)}). No changes were made`);
     }
     job.wlbPaused = true;
     save(job);
@@ -848,14 +850,14 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     // pool counts the host as online again.
     const upBy = Date.now() + UP_MS;
     while (!(await c.call<boolean>("host_metrics.get_live", await c.call<string>("host.get_metrics", h)).catch(() => false))) {
-      if (Date.now() > upBy) throw new Error("The host did not come back after its toolstack restart");
-      if (step.detail !== "waiting for the host to report back") {
-        step.detail = "waiting for the host to report back";
+      if (Date.now() > upBy) throw new Error("The host did not respond after the toolstack restart");
+      if (step.detail !== "waiting for the host") {
+        step.detail = "waiting for the host";
         save(job);
       }
       await sleep(POLL_MS);
     }
-    if (step.detail === "waiting for the host to report back") step.detail = undefined;
+    if (step.detail === "waiting for the host") step.detail = undefined;
   };
 
   // NVIDIA GPUs that carried migration data when the job began. XAPI reads it
@@ -883,7 +885,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     for (;;) {
       if ((await gpusMissingData(h)) === 0) return true;
       if (Date.now() > until) return false;
-      step.detail = "waiting for the GPUs to report their migration data";
+      step.detail = "waiting for the GPUs to report migration data";
       save(job);
       await sleep(POLL_MS);
     }
@@ -900,15 +902,15 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       if (step.detail?.startsWith("waiting for the GPUs")) step.detail = undefined;
       return;
     }
-    step.detail = "the GPUs report no migration data — restarting the toolstack once more";
+    step.detail = "no GPU migration data; restarting the toolstack again";
     save(job);
     await restartToolstack(step, h);
     if (await waitForGpuData(step, h)) {
-      step.detail = "GPU migration data back after a second toolstack restart";
+      step.detail = "GPU migration data available after a second toolstack restart";
       return;
     }
     throw new Error(
-      `the GPUs of ${step.hostName} report no migration data, so no vGPU VM there can be migrated. ` +
+      `The GPUs on ${step.hostName} report no migration data. VMs with vGPUs cannot be migrated. ` +
         "On the host: systemctl restart xcp-rrdd-gpumon && xe-toolstack-restart",
     );
   };
@@ -934,7 +936,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     s.finishedAt = new Date().toISOString();
     if (detail) s.detail = detail;
     // A retry's progress note has no business on a finished step.
-    else if (state === "done" && /attempt \d+ of \d+/.test(s.detail ?? "")) s.detail = "done after a retry";
+    else if (state === "done" && /attempt \d+ of \d+/.test(s.detail ?? "")) s.detail = "completed after retry";
     save(job);
   };
   /**
@@ -955,7 +957,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       } catch (err) {
         if (err instanceof StopRequested || attempt >= total || !retryable(err)) throw err;
         const wait = RETRY_DELAYS_MS[attempt - 1];
-        step.detail = `${what}attempt ${attempt} of ${total} failed (${friendlyXapiError(err)}) — trying again in ${Math.round(wait / 1000)} s`;
+        step.detail = `${what}attempt ${attempt} of ${total} failed (${friendlyXapiError(err)}); retrying in ${Math.round(wait / 1000)} s`;
         save(job);
         await pause(wait);
         step.detail = `${what}attempt ${attempt + 1} of ${total}`;
@@ -1004,16 +1006,16 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
   const askForCoordinatorRestart = async (step: JobStep, stuck: { ref: string; name: string }[]) => {
     const [pool] = await c.call<string[]>("pool.get_all");
     const coordinator = await c.call<string>("pool.get_master", pool);
-    const coordinatorName = await c.call<string>("host.get_name_label", coordinator).catch(() => "the coordinator");
+    const coordinatorName = await c.call<string>("host.get_name_label", coordinator).catch(() => "the pool coordinator");
     const names = stuck.map((x) => x.name);
     const list = names.join(", ");
     const reason =
-      `XenServer still marks ${list} as being evacuated: its evacuation was cancelled but did not end, and every VM migration to ` +
-      `${names.length === 1 ? "it" : "them"} is refused until the toolstack of the coordinator ${coordinatorName} is restarted. ` +
-      "VMs keep running; XenCenter, Workload Balancing and other tools lose their connection for about a minute.";
+      `${list} ${names.length === 1 ? "is" : "are"} still marked as being evacuated after a cancelled evacuation. VM migrations to ` +
+      `${names.length === 1 ? "this host" : "these hosts"} are refused until the toolstack on the pool coordinator ${coordinatorName} is restarted. ` +
+      "VMs continue to run. Connections to the pool are interrupted for approximately one minute.";
     job.attention = { reason, hostNames: names, coordinatorName, since: new Date().toISOString() };
     const before = step.detail;
-    step.detail = `waiting for an administrator to restart the toolstack of ${coordinatorName}`;
+    step.detail = `waiting for an administrator to restart the toolstack on ${coordinatorName}`;
     save(job);
     onEvent("xen_update_attention", "failure", `pool ${job.poolName}`, reason);
     if (job.options.mail) {
@@ -1028,7 +1030,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       await sleep(1000);
     }
     const by = job.attention.confirmedBy;
-    step.detail = `restarting the toolstack of ${coordinatorName}, as ${by} confirmed`;
+    step.detail = `restarting the toolstack on ${coordinatorName} (confirmed by ${by})`;
     save(job);
     onEvent("xen_update_coordinator_toolstack", "success", `host ${coordinatorName}`, `confirmed by ${by}: ${list} stayed marked as being evacuated`);
     await restartToolstack(step, coordinator);
@@ -1036,10 +1038,10 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     job.attention = undefined;
     if (still.length) {
       save(job);
-      throw new Error(`XenServer still marks ${still.map((x) => x.name).join(", ")} as being evacuated after the toolstack of ${coordinatorName} was restarted`);
+      throw new Error(`${still.map((x) => x.name).join(", ")} still marked as being evacuated after the toolstack restart on ${coordinatorName}`);
     }
     abandoned.clear();
-    job.notes.push(`XenServer kept ${list} marked as being evacuated after a cancelled evacuation. ${by} confirmed, and XenMan restarted the toolstack of the coordinator ${coordinatorName}.`);
+    job.notes.push(`${list} remained marked as being evacuated after a cancelled evacuation. The toolstack on the pool coordinator ${coordinatorName} was restarted (confirmed by ${by}).`);
     step.detail = before;
     save(job);
   };
@@ -1066,7 +1068,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     if (result === SETTLED) {
       abandoned.add(task);
       job.notes.push(
-        `XenServer's evacuation of ${step.hostName} did not finish although the host was empty; XenMan cancelled it after ${Math.round(EVAC_EMPTY_MS / 60000) || 1} min.`,
+        `Evacuation of ${step.hostName} did not complete although no VMs remained. The task was cancelled after ${Math.round(EVAC_EMPTY_MS / 60000) || 1} min.`,
       );
       save(job);
       await released(step);
@@ -1087,7 +1089,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     const reboot = pending.some((p) => p.startsWith("reboot_host"));
     const toolstack = !reboot && pending.includes("restart_toolstack");
     if (pending.includes("restart_device_model") || pending.includes("restart_vm")) {
-      job.notes.push(`VMs on ${applied.hostName} need a restart to use the update; XenMan does not restart VMs.`);
+      job.notes.push(`VMs on ${applied.hostName} must be restarted for the update to take effect.`);
     }
     if (!reboot && !toolstack) return;
     if ((reboot && has("reboot")) || (toolstack && (has("toolstack") || has("reboot")))) return;
@@ -1099,7 +1101,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       // Left in maintenance mode, as XenServer requires, and said so.
       for (const x of later) if (x.kind === "enable" || x.kind === "vgpu-on" || x.kind === "vms-back") x.state = "skipped";
       job.notes.push(
-        `${applied.hostName} needs a ${reboot ? "restart" : "toolstack restart"} to finish its update and stays in maintenance mode until then.`,
+        `${applied.hostName} requires a ${reboot ? "host restart" : "toolstack restart"} to complete the update and remains in maintenance mode until then.`,
       );
       save(job);
       return;
@@ -1110,12 +1112,12 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     // too, or the option would not hold when the metadata kept quiet.
     const vgpus = reboot && !evacuated && job.options.vgpuShutdown ? ((await vgpuFacts(await c.get())).vms.get(h)?.length ?? 0) : 0;
     if (vgpus) insert.push(mk("vgpu-off", vgpuOffLabel(vgpus)));
-    if (reboot && !evacuated) insert.push(mk("evacuate", "Move running VMs to other hosts"));
-    insert.push(reboot ? mk("reboot", "Restart the host (the update asked for it)") : mk("toolstack", "Restart the toolstack (the update asked for it)"));
+    if (reboot && !evacuated) insert.push(mk("evacuate", "Evacuate host"));
+    insert.push(reboot ? mk("reboot", "Restart host (required by the update)") : mk("toolstack", "Restart toolstack (required by the update)"));
     job.steps.splice(at + 1, 0, ...insert);
     const enableAt = () => job.steps.findIndex((x, i) => i > at && x.host === h && x.kind === "enable");
     if (reboot && !evacuated && job.options.moveVmsBack) {
-      if (!has("vms-back") && enableAt() >= 0) job.steps.splice(enableAt() + 1, 0, mk("vms-back", "Move the VMs back"));
+      if (!has("vms-back") && enableAt() >= 0) job.steps.splice(enableAt() + 1, 0, mk("vms-back", "Migrate VMs back"));
       if (job.scope === "pool" && !job.steps.some((x) => x.kind === "vms-back" && !x.host)) {
         const refresh = job.steps.findIndex((x) => x.kind === "refresh");
         job.steps.splice(refresh, 0, { ...mk("vms-back", BACK_TO_HOMES), host: null, hostName: null });
@@ -1151,7 +1153,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
         }
       }),
     );
-    end(step, "done", `${vms.length} shut down${forced.length ? `; switched off the hard way: ${forced.join(", ")}` : ""}`);
+    end(step, "done", `${vms.length} shut down${forced.length ? `; forced off: ${forced.join(", ")}` : ""}`);
   };
 
   /** Shuts a VM down cleanly; after SHUTDOWN_MS, or when it refuses, the hard way. True when it took the hard way. */
@@ -1183,7 +1185,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     save(job);
     const failed: string[] = [];
     for (const x of vms) {
-      step.detail = `restarting ${x.name} on another host (no VM Tools)`;
+      step.detail = `restarting ${x.name} on another host (no XenServer VM Tools)`;
       save(job);
       try {
         const hard = await shutDown(x.vm);
@@ -1198,7 +1200,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     }
     delete step.detail;
     if (failed.length) {
-      throw new Error(`not started again on another host: ${failed.join(", ")}. They are started on ${step.hostName} once it is back.`);
+      throw new Error(`not restarted on another host: ${failed.join(", ")}. They will be started on ${step.hostName} when it is available.`);
     }
     return vms.map((x) => x.name);
   };
@@ -1254,7 +1256,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     let moved = 0;
     for (const { vm, name, mem } of vms) {
       if (stopping()) throw new StopRequested();
-      step.detail = `moving ${name} on its own — XenServer found no plan for all VMs at once`;
+      step.detail = `migrating ${name} individually (no placement plan for all VMs)`;
       save(job);
       let best: string | null = null;
       let bestFree = -1;
@@ -1274,7 +1276,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
         }
       }
       if (!best) {
-        noHost.push(`${name} (${mem ? `${GiB(mem)}, ` : ""}${why || "no host takes it"})`);
+        noHost.push(`${name} (${mem ? `${GiB(mem)}, ` : ""}${why || "no suitable host"})`);
         continue;
       }
       const vgpu = (await c.call<string[]>("VM.get_VGPUs", vm).catch(() => [] as string[])).length > 0;
@@ -1294,9 +1296,9 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     }
     delete step.detail;
     if (noHost.length) {
-      throw new Error(`XenServer found no host for: ${noHost.join(", ")} — even moving them one by one`);
+      throw new Error(`No suitable host found for: ${noHost.join(", ")}`);
     }
-    return `${moved} moved one by one (XenServer found no plan for all at once)`;
+    return `${moved} migrated individually (no placement plan for all VMs)`;
   };
 
   /** Starts a host's VMs with a vGPU that this job shut down, on that host. */
@@ -1343,14 +1345,14 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
         // member has not yet reported back to the coordinator.
         const starting = err instanceof Error && ["HOST_STILL_BOOTING", "HOST_OFFLINE"].includes(err.message);
         if (!starting || Date.now() > until) throw err;
-        if (step.detail !== "waiting for the toolstack to finish starting") {
-          step.detail = "waiting for the toolstack to finish starting";
+        if (step.detail !== "waiting for the toolstack to start") {
+          step.detail = "waiting for the toolstack to start";
           save(job);
         }
         await sleep(POLL_MS);
       }
     }
-    if (step.detail === "waiting for the toolstack to finish starting") step.detail = undefined;
+    if (step.detail === "waiting for the toolstack to start") step.detail = undefined;
   };
 
   /**
@@ -1379,20 +1381,20 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     const busy = poolBusy(err) && job.options.automatic && !coordinatorRestarted;
     const restartCoordinator = async (coordinator: string): Promise<"again"> => {
       coordinatorRestarted = true;
-      const name = await c.call<string>("host.get_name_label", coordinator).catch(() => "the coordinator");
+      const name = await c.call<string>("host.get_name_label", coordinator).catch(() => "the pool coordinator");
       const blocked = [...poolBusyHosts.values()].join(", ");
-      step.detail = `another operation keeps blocking the pool — restarting the toolstack of ${name}`;
+      step.detail = `pool blocked by another operation; restarting the toolstack on ${name}`;
       save(job);
       onEvent("xen_update_coordinator_toolstack", "success", `host ${name}`, `the pool was blocked for ${blocked}`);
       await restartToolstack(step, coordinator);
-      job.notes.push(`Another operation kept blocking the pool (${blocked}). XenMan restarted the toolstack of the coordinator ${name} and tried again.`);
-      step.detail = `trying again after restarting the toolstack of ${name}`;
+      job.notes.push(`Another operation blocked the pool (${blocked}). The toolstack on the pool coordinator ${name} was restarted and the step retried.`);
+      step.detail = `retrying after toolstack restart on ${name}`;
       save(job);
       return "again";
     };
     if (busy) {
       // Another host blocked the same way before, or this one again on its second try.
-      const another = [...poolBusyHosts.keys()].some((x) => x !== h) || (poolBusyHosts.has(h) && step.label.endsWith("(second try)"));
+      const another = [...poolBusyHosts.keys()].some((x) => x !== h) || (poolBusyHosts.has(h) && step.label.endsWith(RETRY_SUFFIX));
       poolBusyHosts.set(h, step.hostName ?? h);
       if (another) {
         const coordinator = await coordinatorOf();
@@ -1401,7 +1403,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     }
     if (round <= HOST_RETRY_DELAYS_MS.length) {
       const wait = HOST_RETRY_DELAYS_MS[round - 1];
-      step.detail = `failed (${message}) — trying again in ${Math.round(wait / 60000) || 1} min`;
+      step.detail = `failed (${message}); retrying in ${Math.round(wait / 60000) || 1} min`;
       save(job);
       onEvent("xen_update_step_retry", "failure", `host ${step.hostName}`, `${step.label}: ${message}`);
       await pause(wait);
@@ -1427,18 +1429,18 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     const pending = await c.call<string[]>("host.get_pending_guidances", h).catch(() => [] as string[]);
     let state = "";
     if (!live) state = "is not reachable";
-    else if (!enabled && pending.some((x) => x.startsWith("reboot_host") || x === "restart_toolstack")) state = "stays in maintenance mode: a restart is pending";
+    else if (!enabled && pending.some((x) => x.startsWith("reboot_host") || x === "restart_toolstack")) state = "remains in maintenance mode (restart pending)";
     else if (!enabled) {
       const tmp: JobStep = { ...step, id: crypto.randomUUID(), detail: undefined };
       try {
         await enableHost(tmp, h);
-        state = "is back in service";
+        state = "has returned to service";
       } catch (e) {
-        state = `stays in maintenance mode (${friendlyXapiError(e)})`;
+        state = `remains in maintenance mode (${friendlyXapiError(e)})`;
       }
     } else state = "is in service";
-    if (state === "is back in service" || state === "is in service") await vgpuOn(h).catch(() => ({ started: 0, failed: [] }));
-    job.notes.push(`${step.hostName} was skipped — ${step.label} failed: ${message}. It ${state}.${first ? " It is tried again at the end." : ""}`);
+    if (state === "has returned to service" || state === "is in service") await vgpuOn(h).catch(() => ({ started: 0, failed: [] }));
+    job.notes.push(`${step.hostName} was skipped: ${step.label} failed (${message}). The host ${state}.${first ? " It will be retried at the end." : ""}`);
 
     // Once more after the last host, as the host is now.
     if (first) {
@@ -1447,7 +1449,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
         const now = u.hosts.find((x) => x.ref === h);
         if (now && (now.updates.length > 0 || now.pending.length > 0 || !now.enabled)) {
           const vgpus = (await vgpuFacts(await c.get())).vms.get(h)?.length ?? 0;
-          const again = stepsFor(now, job.options, vgpus).map((x) => ({ ...x, id: crypto.randomUUID(), state: "todo" as StepState, label: `${x.label} (second try)` }));
+          const again = stepsFor(now, job.options, vgpus).map((x) => ({ ...x, id: crypto.randomUUID(), state: "todo" as StepState, label: `${x.label}${RETRY_SUFFIX}` }));
           const at = job.steps.findIndex((x) => x.host === null);
           job.steps.splice(at < 0 ? job.steps.length : at, 0, ...again);
         } else {
@@ -1483,16 +1485,16 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       if (reboot || pending.includes("restart_toolstack")) {
         enable.state = "skipped";
         job.notes.push(
-          `${current.hostName} stays in maintenance mode: it needs a ${reboot ? "restart" : "toolstack restart"} to finish its update. Restart it, then take it out of maintenance mode.`,
+          `${current.hostName} remains in maintenance mode. A ${reboot ? "host restart" : "toolstack restart"} is required to complete the update. Restart the host, then exit maintenance mode.`,
         );
       } else {
         begin(enable);
         try {
           await enableHost(enable, h);
-          end(enable, "done", "after the stop");
+          end(enable, "done", "after the update was stopped");
         } catch (e) {
           end(enable, "failed", friendlyXapiError(e));
-          job.notes.push(`${current.hostName} could not be taken out of maintenance mode (${friendlyXapiError(e)}). Do it in XenCenter.`);
+          job.notes.push(`${current.hostName} could not exit maintenance mode (${friendlyXapiError(e)}). Exit maintenance mode manually.`);
         }
       }
     }
@@ -1508,7 +1510,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     }
     if (away.length) {
       job.notes.push(
-        `Moved away by this update and not back: ${away.slice(0, 10).join(", ")}${away.length > 10 ? ` and ${away.length - 10} more` : ""}. They keep running where they are.`,
+        `VMs migrated by this update and not migrated back: ${away.slice(0, 10).join(", ")}${away.length > 10 ? ` and ${away.length - 10} more` : ""}. They continue to run on their current host.`,
       );
     }
     job.state = "stopped";
@@ -1563,7 +1565,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
                 : stuck.every((x) => x.busy)
                   ? ` -- still busy after ${Math.round(BUSY_WAIT_MS / 60000)} minutes`
                   : "";
-              throw new Error(`its VMs cannot be moved to another host: ${listStuck(stuck)}${why}`);
+              throw new Error(`VMs cannot be migrated to another host: ${listStuck(stuck)}${why}`);
             }
           }
           await retry(step, () => c.call("host.disable", h), transient);
@@ -1611,7 +1613,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
                 coldMoved.push(name);
               }
               if (!coldMoved.length) throw err;
-              job.notes.push(`Live migration of VMs with a vGPU off ${step.hostName} failed (${friendlyXapiError(err)}); shut down and started on another host instead: ${coldMoved.join(", ")}.`);
+              job.notes.push(`Live migration of VMs with vGPUs from ${step.hostName} failed (${friendlyXapiError(err)}). Restarted on another host: ${coldMoved.join(", ")}.`);
             }
           }
           // Another evacuate moves whatever the last one left behind -- unless
@@ -1628,8 +1630,8 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           end(
             step,
             "done",
-            (running.length ? `${moved} VM${moved === 1 ? "" : "s"} moved` : "no running VMs") +
-              (restarted.length ? `; shut down and started on another host (no VM Tools): ${restarted.join(", ")}` : "") +
+            (running.length ? `${moved} VM${moved === 1 ? "" : "s"} migrated` : "no running VMs") +
+              (restarted.length ? `; restarted on another host (no XenServer VM Tools): ${restarted.join(", ")}` : "") +
               (coldMoved.length ? `; vGPU migration failed, restarted on another host: ${coldMoved.join(", ")}` : "") +
               (oneByOne ? `; ${oneByOne}` : "") +
               after(attempts),
@@ -1679,7 +1681,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           }
           const upBy = Date.now() + UP_MS;
           while (!(await c.call<boolean>("host_metrics.get_live", await c.call<string>("host.get_metrics", h)).catch(() => false))) {
-            if (Date.now() > upBy) throw new Error("The host did not come back after its restart");
+            if (Date.now() > upBy) throw new Error("The host did not respond after the restart");
             await sleep(POLL_MS);
           }
           await gpusReady(step, h);
@@ -1715,11 +1717,11 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           let settle: Promise<void> | null = null;
           let gpuTurn: Promise<unknown> = Promise.resolve();
           const stopHere = () => {
-            step.detail = `${moved} moved back, then stopped`;
+            step.detail = `${moved} migrated back before the update was stopped`;
             return new StopRequested();
           };
           const progress = () => {
-            step.detail = `${moved} of ${due.length} moved back`;
+            step.detail = `${moved} of ${due.length} migrated back`;
             save(job);
           };
           const oneVm = async (vm: string, to: string) => {
@@ -1735,7 +1737,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
             settle ??=
               SETTLE_MS > 0
                 ? (async () => {
-                    step.detail = "letting the restarted toolstacks settle";
+                    step.detail = "waiting for the toolstacks to settle";
                     save(job);
                     await pause(SETTLE_MS);
                   })()
@@ -1780,7 +1782,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
                     await coldMove(vm, name, to, step);
                     moved++;
                     progress();
-                    job.notes.push(`${name}'s migration back failed (${friendlyXapiError(err)}); it was shut down and started again on ${toName}.`);
+                    job.notes.push(`Migration of ${name} back to its host failed (${friendlyXapiError(err)}). The VM was restarted on ${toName}.`);
                   } catch (e) {
                     gaveUp.add(vm);
                     failed.push(`${name} → ${toName} (${friendlyXapiError(e)})`);
@@ -1809,10 +1811,10 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           end(
             step,
             "done",
-            !due.length ? "nothing was still away" : failed.length ? `${moved} moved back; not moved: ${failed.join(", ")}` : `${moved} moved back`,
+            !due.length ? "no VMs to migrate back" : failed.length ? `${moved} migrated back; not migrated: ${failed.join(", ")}` : `${moved} migrated back`,
           );
           if (failed.length) {
-            job.notes.push(`Some VMs could not be moved back and keep running where they are: ${failed.join(", ")}`);
+            job.notes.push(`The following VMs could not be migrated back and continue to run on their current host: ${failed.join(", ")}`);
           }
           continue steps;
         }
@@ -1863,7 +1865,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
       await wrapUp(err).catch((e) => {
         job.state = "stopped";
         job.finishedAt = new Date().toISOString();
-        job.notes.push(`Tidying up after the stop failed (${friendlyXapiError(e)}). Check the hosts: one may still be in maintenance mode.`);
+        job.notes.push(`Cleanup after stopping the update failed (${friendlyXapiError(e)}). Check the hosts: a host may still be in maintenance mode.`);
         save(job);
       });
       return;
@@ -1892,7 +1894,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     job.error = running?.hostName
       ? `${running.label} failed on ${running.hostName}: ${message}.${
           restored
-            ? ` Nothing was installed on ${running.hostName}; it is back in service.`
+            ? ` Nothing was installed on ${running.hostName}; the host has returned to service.`
             : untouched
               ? ` Nothing was changed on ${running.hostName}.`
               : " The host may still be in maintenance mode."
@@ -1912,7 +1914,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
         job.wlbPaused = false;
         onEvent("xen_update_wlb", "success", `pool ${job.poolName}`, "Workload Balancing resumed after the update");
       } catch (e) {
-        job.notes.push(`Workload Balancing, paused for this update, could not be resumed (${friendlyXapiError(e)}). Resume it in the pool's WLB tab.`);
+        job.notes.push(`Workload Balancing could not be resumed (${friendlyXapiError(e)}). Resume it on the pool's WLB tab.`);
         onEvent("xen_update_wlb", "failure", `pool ${job.poolName}`, `Workload Balancing not resumed: ${friendlyXapiError(e)}`);
       }
       save(job);
@@ -1935,9 +1937,9 @@ export async function resumeWlbLeftPaused(): Promise<void> {
       const [p] = await call<string[]>(s, "pool.get_all");
       await call(s, "pool.set_wlb_enabled", p, true);
       job.wlbPaused = false;
-      job.notes.push("Workload Balancing, paused for this update, was resumed when XenMan started again.");
+      job.notes.push("Workload Balancing was resumed after XenMan restarted.");
     } catch (e) {
-      const note = `Workload Balancing, paused for this update, is still paused (${friendlyXapiError(e)}). Resume it in the pool's WLB tab.`;
+      const note = `Workload Balancing is still paused (${friendlyXapiError(e)}). Resume it on the pool's WLB tab.`;
       if (!job.notes.includes(note)) job.notes.push(note);
     } finally {
       if (s) await closePoolSession(s).catch(() => {});
