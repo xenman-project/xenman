@@ -16,11 +16,13 @@ import {
   MinusCircle,
   RefreshCw,
   RotateCcw,
+  Settings2,
   ShieldAlert,
   Square,
   XCircle,
 } from "lucide-react";
 import { XenUpdateDialog } from "@/components/xen-update-dialog";
+import { XenUpdatesConfigDialog, type UpdateConfig } from "@/components/xen-updates-config-dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -76,6 +78,7 @@ interface PoolUpdates {
     lastSync: string | null;
     autoSync: { enabled: boolean; frequency: string | null };
     channel: { name: string; url: string } | null;
+    config?: UpdateConfig;
   };
   hosts: HostState[];
   updates: XenUpdate[];
@@ -148,6 +151,8 @@ const TYPE_TEXT: Record<string, string> = {
   Foundational: "Foundational",
 };
 
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 /** "weekly" as a status: "Weekly". */
 const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
@@ -168,6 +173,7 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [job, setJob] = useState<Job | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [jobSeenAt, setJobSeenAt] = useState(0);
 
   const loadJob = useCallback(async () => {
@@ -277,6 +283,12 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                   <RefreshCw className={`mr-2 h-4 w-4 ${running ? "animate-spin" : ""}`} />
                   {running ? "Checking" : "Check for Updates"}
                 </Button>
+                {data?.pool.config && (
+                  <Button size="sm" variant="outline" onClick={() => setConfigOpen(true)} disabled={running || jobRunning}>
+                    <Settings2 className="mr-2 h-4 w-4" />
+                    Configure Updates
+                  </Button>
+                )}
                 {data && due && (
                   <Button size="sm" onClick={() => setDialogOpen(true)} disabled={running || jobRunning}>
                     <Download className="mr-2 h-4 w-4" />
@@ -296,7 +308,13 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
               </div>
               <div className="flex justify-between gap-4">
                 <span className="text-muted-foreground">Automatic synchronization</span>
-                <span>{data.pool.autoSync.enabled ? capitalize(data.pool.autoSync.frequency ?? "enabled") : "Disabled"}</span>
+                <span>
+                  {!data.pool.autoSync.enabled
+                    ? "Disabled"
+                    : data.pool.autoSync.frequency === "weekly" && data.pool.config
+                      ? `Weekly (${WEEKDAYS[data.pool.config.sync.day] ?? ""})`
+                      : capitalize(data.pool.autoSync.frequency ?? "enabled")}
+                </span>
               </div>
             </div>
           )}
@@ -493,6 +511,20 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
             loadJob();
             refreshUpdateBadges();
           }}
+        />
+      )}
+      {isAdmin && data?.pool.config && (
+        <XenUpdatesConfigDialog
+          open={configOpen}
+          onOpenChange={setConfigOpen}
+          hostId={hostId}
+          config={data.pool.config}
+          channelName={data.pool.channel?.name ?? null}
+          onSaved={() => {
+            load(true);
+            refreshUpdateBadges();
+          }}
+          onSync={checkNow}
         />
       )}
     </div>

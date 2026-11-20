@@ -226,7 +226,10 @@ export interface PoolUpdates {
     coordinator: string;
     lastSync: string | null;
     autoSync: { enabled: boolean; frequency: string | null };
+    /** `name`: as XenCenter shows it ("Normal"), not the repository's key. */
     channel: { name: string; url: string } | null;
+    /** What Configure Updates edits. Never the proxy password itself. */
+    config: UpdateConfig;
   };
   hosts: HostUpdateState[];
   updates: XenUpdate[];
@@ -236,7 +239,77 @@ export interface PoolUpdates {
   checkedAt: string;
 }
 
-const RANK: Guidance[] = ["RebootHost", "EvacuateHost", "RestartToolstack", "RestartDeviceModel"];
+// ─── the update channel ──────────────────────────────────────────────────────
+
+/**
+ * The update channels, as XenCenter's RepoDescriptor knows them: a repository
+ * is the channel when its name_label is the key or its binary_url the URL.
+ * URLs from XenServer's documentation (Apply updates using xe).
+ */
+interface RepoDesc {
+  key: string;
+  name: string;
+  bin: string;
+  src: string;
+}
+const BASE_REPO: RepoDesc = {
+  key: "base_repo",
+  name: "Base",
+  bin: "https://repo.ops.xenserver.com/xs8/base",
+  src: "https://repo-src.ops.xenserver.com/xs8/base",
+};
+export type ChannelKey = "normal" | "early_access";
+export const CHANNELS: Record<ChannelKey, RepoDesc> = {
+  normal: {
+    key: "normal_repo",
+    name: "Normal",
+    bin: "https://repo.ops.xenserver.com/xs8/normal",
+    src: "https://repo-src.ops.xenserver.com/xs8/normal",
+  },
+  early_access: {
+    key: "early_access_repo",
+    name: "Early Access",
+    bin: "https://repo.ops.xenserver.com/xs8/earlyaccess",
+    src: "https://repo-src.ops.xenserver.com/xs8/earlyaccess",
+  },
+};
+const repoMatches = (d: RepoDesc, r: Record<string, unknown> | undefined) =>
+  !!r && (r.name_label === d.key || r.binary_url === d.bin);
+const channelOf = (r: Record<string, unknown> | undefined): ChannelKey | null =>
+  (Object.keys(CHANNELS) as ChannelKey[]).find((k) => repoMatches(CHANNELS[k], r)) ?? null;
+
+export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+export interface UpdateConfig {
+  /** Null: none, or one that is neither Normal nor Early Access (see channel.name). */
+  channel: ChannelKey | null;
+  /** XenServer releases before XAPI 23.18 have no schedule. */
+  sync: { supported: boolean; enabled: boolean; frequency: "daily" | "weekly"; day: number };
+  proxy: { url: string; username: string; passwordSet: boolean };
+}
+
+const NULL_REF = "OpaqueRef:NULL";
+
+function updateConfigOf(pool: Record<string, unknown>, channel: Record<string, unknown> | undefined): UpdateConfig {
+  const day = Number(pool.update_sync_day);
+  const secret = String(pool.repository_proxy_password ?? "");
+  return {
+    channel: channelOf(channel),
+    sync: {
+      supported: "update_sync_enabled" in pool,
+      enabled: Boolean(pool.update_sync_enabled),
+      frequency: pool.update_sync_frequency === "daily" ? "daily" : "weekly",
+      day: Number.isInteger(day) && day >= 0 && day <= 6 ? day : 0,
+    },
+    proxy: {
+      url: String(pool.repository_proxy_url ?? ""),
+      username: String(pool.repository_proxy_username ?? ""),
+      passwordSet: secret !== "" && secret !== NULL_REF,
+    },
+  };
+}
+
+const RANK: Guidance[] =["RebootHost", "EvacuateHost", "RestartToolstack", "RestartDeviceModel"];
 
 const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" && v ? [v] : []);
 
@@ -302,7 +375,9 @@ export function friendlyXapiError(err: unknown): string {
   const code = err.message;
   const known: Record<string, string> = {
     LICENSE_RESTRICTION: "The pool's XenServer license does not include updates.",
-    NO_REPOSITORY_ENABLED: "No update channel is configured for this pool — set one up in XenCenter under Configure Updates.",
+    NO_REPOSITORY_ENABLED: "No update channel is configured for this pool. Select one under Configure Updates.",
+    INVALID_REPOSITORY_PROXY_URL: "The proxy URL is not valid. It must start with http:// or https://.",
+    INVALID_REPOSITORY_PROXY_CREDENTIAL: "Enter both a username and a password for the proxy, or neither.",
     MULTIPLE_UPDATE_REPOSITORIES_ENABLED: "More than one update channel is enabled for this pool.",
     REPOSITORY_IS_IN_USE: "The update channel is busy — try again in a moment.",
     OTHER_OPERATION_IN_PROGRESS: "Another operation is running on the pool — try again in a moment.",
@@ -350,7 +425,7 @@ export async function readPoolUpdates(hostId: string): Promise<PoolUpdates> {
     // for it, it is known to be reachable from here.
     const { json, problem } = poolRepos.length
       ? await fetchUpdates(s, s.address)
-      : { json: null, problem: "No update channel is configured for this pool — set one up in XenCenter under Configure Updates." };
+      : { json: null, problem: "No update channel is configured for this pool. Select one under Configure Updates." };
 
     const perHost = new Map<string, Record<string, unknown>>();
     for (const h of ((json?.hosts as Record<string, unknown>[]) || [])) perHost.set(String(h.ref), h);
@@ -414,7 +489,16 @@ export async function readPoolUpdates(hostId: string): Promise<PoolUpdates> {
         coordinator,
         lastSync: xapiDate(pool.last_update_sync),
         autoSync: { enabled: Boolean(pool.update_sync_enabled), frequency: pool.update_sync_frequency ? String(pool.update_sync_frequency) : null },
-        channel: channel ? { name: String(channel.name_label ?? ""), url: String(channel.binary_url ?? "") } : null,
+        channel: channel
+          ? {
+              name: (() => {
+                const k = channelOf(channel);
+                return k ? CHANNELS[k].name : String(channel.name_description || channel.name_label || "");
+              })(),
+              url: String(channel.binary_url ?? ""),
+            }
+          : null,
+        config: updateConfigOf(pool, channel),
       },
       hosts,
       // Only what some host still lacks, newest first.
@@ -503,4 +587,98 @@ export async function cachedPoolUpdates(hostId: string, fresh = false): Promise<
     failures.set(hostId, { at: Date.now(), error: err });
     throw err;
   }
+}
+
+// ─── Configure Updates ───────────────────────────────────────────────────────
+
+export interface UpdateConfigChanges {
+  channel?: ChannelKey;
+  sync?: { enabled: boolean; frequency: "daily" | "weekly"; day: number };
+  /** `password` left out: the stored one stays (empty url: no proxy). */
+  proxy?: { url: string; username: string; password?: string };
+}
+
+/**
+ * Sets what XenCenter's Configure Updates sets, with XenCenter's calls, and
+ * only what differs from the pool's current settings. Returns what changed,
+ * in words for the audit log -- never the proxy password.
+ */
+export async function configureUpdates(hostId: string, changes: UpdateConfigChanges): Promise<string[]> {
+  const s = await openPoolSession(hostId);
+  const done: string[] = [];
+  try {
+    const pools = await call<Record<string, Record<string, unknown>>>(s, "pool.get_all_records");
+    const [poolRef, pool] = Object.entries(pools)[0] ?? [];
+    if (!poolRef || !pool) throw new Error("The pool could not be read.");
+
+    // ConfigYumRepoAction: every other channel off; the wanted one introduced
+    // if the pool does not know it yet (the base repository first, if that is
+    // missing too); then on.
+    if (changes.channel) {
+      const target = CHANNELS[changes.channel];
+      const repos = await call<Record<string, Record<string, unknown>>>(s, "Repository.get_all_records");
+      const enabled = ((pool.repositories as string[]) || []).map(String);
+      const others = enabled.filter((r) => !repoMatches(target, repos[r]));
+      if (enabled.length === 0 || others.length > 0) {
+        for (const r of others) await call(s, "pool.remove_repository", poolRef, r);
+        let ref = Object.keys(repos).find((r) => repoMatches(target, repos[r]));
+        if (!ref) {
+          if (!Object.values(repos).some((r) => repoMatches(BASE_REPO, r))) {
+            await call(s, "Repository.introduce", BASE_REPO.key, BASE_REPO.name, BASE_REPO.bin, BASE_REPO.src, false, "");
+          }
+          ref = await call<string>(s, "Repository.introduce", target.key, target.name, target.bin, target.src, true, "");
+        }
+        if (!enabled.includes(ref)) await call(s, "pool.add_repository", poolRef, ref);
+        done.push(`channel: ${target.name}`);
+      }
+    }
+
+    // ConfigCdnSyncAction and ToggleCdnSyncAction; not on releases without a schedule.
+    if (changes.sync && "update_sync_enabled" in pool) {
+      const { enabled, frequency, day } = changes.sync;
+      const before = updateConfigOf(pool, undefined).sync;
+      let changed = false;
+      if (before.frequency !== frequency || before.day !== day) {
+        await call(s, "pool.configure_update_sync", poolRef, frequency, String(day));
+        changed = true;
+      }
+      if (before.enabled !== enabled) {
+        await call(s, "pool.set_update_sync_enabled", poolRef, enabled);
+        changed = true;
+      }
+      if (changed) {
+        done.push(`automatic synchronization: ${enabled ? (frequency === "daily" ? "daily" : `weekly (${WEEKDAYS[day]})`) : "off"}`);
+      }
+    }
+
+    // RepositoryProxyAction. An unchanged password is read back from its
+    // secret here, on the server, as XenCenter does for its "dummy" password.
+    if (changes.proxy) {
+      const url = changes.proxy.url.trim();
+      const username = changes.proxy.username.trim();
+      const before = updateConfigOf(pool, undefined).proxy;
+      if (!url) {
+        if (before.url) {
+          await call(s, "pool.disable_repository_proxy", poolRef);
+          done.push("proxy: none");
+        }
+      } else if (url !== before.url || username !== before.username || changes.proxy.password !== undefined) {
+        let password = changes.proxy.password;
+        if (password === undefined) {
+          const secret = String(pool.repository_proxy_password ?? "");
+          password =
+            username && secret && secret !== NULL_REF
+              ? String((await call<Record<string, unknown>>(s, "Secret.get_record", secret)).value ?? "")
+              : "";
+        }
+        if (!username) password = "";
+        await call(s, "pool.configure_repository_proxy", poolRef, url, username, password);
+        done.push(`proxy: ${url}${username ? ` (user ${username})` : ""}`);
+      }
+    }
+  } finally {
+    await closePoolSession(s);
+  }
+  if (done.length) cache.delete(hostId);
+  return done;
 }
