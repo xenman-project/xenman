@@ -3,6 +3,7 @@ import { TaskProvider } from "@/context/task-context";
 import { AuthProvider } from "@/context/auth-context";
 import { AppShell } from "@/components/app-shell";
 import { TaskWidget } from "@/components/task-widget";
+import { TaskDock } from "@/components/task-dock";
 import { AlertBell } from "@/components/alert-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OsUpdateBanner } from "@/components/os-update-banner";
@@ -44,7 +45,9 @@ export default function MainLayout({
                 <div className="hidden md:contents">
                   <AppBreadcrumb />
                 </div>
-                <main className="flex flex-1 overflow-hidden">{children}</main>
+                <main className="flex min-h-0 flex-1 overflow-hidden">{children}</main>
+                {/* Recent Tasks, docked under every view (from md up; a phone shows a card in the overview). */}
+                <TaskDock />
                 <footer className="hidden shrink-0 border-t border-zinc-200 bg-[var(--shell-canvas)] px-4 py-1.5 md:flex items-center justify-between text-[11px] text-zinc-400 dark:border-zinc-800">
                   <span className="font-mono">{process.env.NEXT_PUBLIC_GIT_COMMIT}</span>
                 </footer>
@@ -55,9 +58,12 @@ export default function MainLayout({
                 and neither jumps when the other appears. */}
             {/* Signs out after the inactivity timeout, when one is set. */}
             <InactivityGuard />
-            <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 md:bottom-12">
+            {/* From md up above the docked Recent Tasks, which also replaces the task pill there. */}
+            <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 md:bottom-[calc(3rem+var(--task-dock-h,0px))]">
               <AlertBell />
-              <TaskWidget />
+              <div className="md:hidden">
+                <TaskWidget />
+              </div>
             </div>
           </div>
           </TooltipProvider>
