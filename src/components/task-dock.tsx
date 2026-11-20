@@ -106,10 +106,11 @@ export function TaskDock() {
     return next;
   };
 
+  // Light: white like a card on the grey shell, so it stands apart. Dark: the shell's own colour, as it was.
   return (
     <section
       aria-label="Recent Tasks"
-      className="hidden shrink-0 flex-col border-t border-zinc-300 bg-card text-card-foreground shadow-[0_-2px_6px_rgb(0_0_0/0.06)] md:flex dark:border-zinc-700"
+      className="hidden shrink-0 flex-col border-t border-zinc-300 bg-card text-card-foreground shadow-[0_-2px_6px_rgb(0_0_0/0.06)] md:flex dark:border-zinc-800 dark:bg-[var(--shell-canvas)] dark:shadow-none"
     >
       {open && (
         <div
