@@ -139,7 +139,18 @@ export function updateSeenTasks(poolId: string, running: SeenTask[]): SeenTask[]
   const now = Date.now();
   const map = seen.get(poolId) ?? new Map<string, SeenTask>();
   // A start XenServer did not give in a known form: when it was first seen.
-  for (const t of running) map.set(t.ref, { ...t, startedAt: map.get(t.ref)?.startedAt ?? t.startedAt, lastSeen: now });
+  // Its object too: once the task has ended, the VM no longer shows it among its operations.
+  for (const t of running) {
+    const before = map.get(t.ref);
+    const keepObject = !t.object.ref && before?.object.ref;
+    map.set(t.ref, {
+      ...t,
+      startedAt: before?.startedAt ?? t.startedAt,
+      object: keepObject ? before!.object : t.object,
+      hostRefs: keepObject ? before!.hostRefs : t.hostRefs,
+      lastSeen: now,
+    });
+  }
   for (const [ref, t] of map) {
     if (t.state === "running" && t.lastSeen !== now) {
       // Gone without being seen to end: XenServer destroyed it after its client read the result.

@@ -109,7 +109,7 @@ export function TaskDock() {
   return (
     <section
       aria-label="Recent Tasks"
-      className="hidden shrink-0 flex-col border-t border-zinc-200 bg-[var(--shell-canvas)] md:flex dark:border-zinc-800"
+      className="hidden shrink-0 flex-col border-t border-zinc-300 bg-card text-card-foreground shadow-[0_-2px_6px_rgb(0_0_0/0.06)] md:flex dark:border-zinc-700"
     >
       {open && (
         <div
@@ -120,7 +120,7 @@ export function TaskDock() {
           aria-valuemin={MIN_HEIGHT}
           tabIndex={0}
           title="Drag to resize. Double-click to reset."
-          className="h-1.5 shrink-0 cursor-row-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none"
+          className="group flex h-2.5 shrink-0 cursor-row-resize touch-none items-center justify-center border-b border-zinc-200 bg-zinc-100 transition-colors hover:bg-primary/20 focus-visible:bg-primary/30 focus-visible:outline-none dark:border-zinc-800 dark:bg-zinc-900"
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
             drag.current = { y: e.clientY, h: height };
@@ -142,7 +142,10 @@ export function TaskDock() {
             e.preventDefault();
             write(HEIGHT_KEY, String(setKept(height + (e.key === "ArrowUp" ? 20 : -20))));
           }}
-        />
+        >
+          {/* The grip: where to take hold of it. */}
+          <span className="h-1 w-10 rounded-full bg-zinc-300 group-hover:bg-primary/60 dark:bg-zinc-700" />
+        </div>
       )}
       <button
         type="button"

@@ -214,7 +214,7 @@ export function RecentTasksTable({
     !!t.cancel &&
     (role === "admin" || (role === "operator" && t.cancel.kind === "task" && !t.cancel.adminOnly));
 
-  const head = stickyHeader ? "sticky top-0 z-10 bg-[var(--shell-canvas)]" : "";
+  const head = stickyHeader ? "sticky top-0 z-10 bg-card" : "";
 
   return (
     <>
