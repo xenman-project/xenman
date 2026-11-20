@@ -17,6 +17,7 @@ import { writeFileAtomic } from "./atomic-write";
 import { mailJobAttention, mailJobEnded } from "./xen-update-mail";
 import { rememberRefNames } from "./ref-names";
 import { formatTime } from "./date-format";
+import { markInternalTask } from "./task-registry";
 import { serverDateFormat } from "./display-settings";
 import { XenApiError } from "./xen-client";
 import { CertMismatchError } from "./host-trust";
@@ -866,6 +867,7 @@ class Conn {
   async stoppable(cancelWhen: () => boolean, method: string, timeout: number, ...params: unknown[]): Promise<string> {
     const s = await this.get();
     const task = await call<string>(s, method, ...params);
+    markInternalTask(task);
     return awaitTask(s, task, timeout, undefined, cancelWhen);
   }
   /** Waits until the pool answers again -- after a coordinator restart. */
@@ -1142,6 +1144,7 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
   const evacuate = async (step: JobStep, h: string, cancel: () => boolean): Promise<void> => {
     const s = await c.get();
     const task = await call<string>(s, "Async.host.evacuate", h);
+    markInternalTask(task);
     let result: string;
     try {
       result = await awaitTask(s, task, EVACUATE_MS, undefined, cancel, { check: () => hostEmpty(h), afterMs: EVAC_EMPTY_MS });

@@ -126,7 +126,9 @@ import {
   XenPoolTask,
   ParsedXenEvent,
 } from "@/lib/types";
-import { auditRequest, clientIp, type AuditCategory, type AuditOutcome } from "@/lib/audit";
+import { actorOf, auditRequest, clientIp, type AuditCategory, type AuditOutcome } from "@/lib/audit";
+import { dropAction, isInternalTask, markLinkedTask, settleAction, trackAction, type JobKind, type TaskObject } from "@/lib/task-registry";
+import { cancelIsAdminOnly, recentTasks } from "@/lib/recent-tasks";
 import { getMgmtJob, runningMgmtJob, startManagementChange } from "@/lib/network-mgmt-job";
 import { buildGpuOverview } from "@/lib/xen-gpu";
 import { buildMemoryOverview } from "@/lib/xen-memory";
@@ -828,7 +830,7 @@ const READ_ONLY_ACTIONS = new Set([
   "connect", "disconnect", "refresh", "host_metrics",
   "vm_isos", "vm_srs", "vm_disks", "vm_nics",
   "vm_templates", "vm_get_boot_params", "vm_get_platform",
-  "pool_networks", "task_status", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
+  "pool_networks", "task_status", "tasks_list", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
   "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status", "pool_coordinator_options",
   "pvs_overview", "pvs_vm_status",
@@ -2599,6 +2601,29 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ taskRef: provisionTaskRef, vmRef: newVmRef, startAfter: !!startAfter });
       }
 
+      case "tasks_list": {
+        // Recent Tasks of the session's pool (lib/recent-tasks.ts); a host's are filtered in the browser.
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        const ctx = { poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) };
+        return NextResponse.json({ tasks: await recentTasks(poolId, sessionCall(ctx)) });
+      }
+
+      case "task_cancel": {
+        // A XenServer task from Recent Tasks. A VM's task operators may cancel
+        // too; a host's or the pool's only administrators (as ADMIN_ONLY_ACTIONS).
+        const taskRef = body.taskRef;
+        if (!isXenRef(taskRef)) return NextResponse.json({ error: "No task given" }, { status: 400 });
+        if (isInternalTask(taskRef)) {
+          return NextResponse.json({ error: "This task belongs to a XenMan job. Stop the job instead." }, { status: 409 });
+        }
+        const record = await taskGetRecord(host, port, useSsl, sessionRef, taskRef);
+        if (cancelIsAdminOnly(String(record.name_label ?? "")) && auth.role !== "admin") {
+          return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
+        }
+        await xenApiCall(host, port, useSsl, "task.cancel", [sessionRef, taskRef]);
+        return NextResponse.json({ success: true });
+      }
+
       case "task_status": {
         const { taskRef } = body;
         const record = await taskGetRecord(host, port, useSsl, sessionRef, taskRef);
@@ -3894,6 +3919,128 @@ function auditDetail(f: XenActionFields): string | undefined {
   return parts.length ? parts.join(", ") : undefined;
 }
 
+// ─── Recent Tasks ────────────────────────────────────────────────────────────
+
+const POWER_OPERATIONS: Record<string, string> = {
+  start: "Start",
+  clean_shutdown: "Shut down",
+  hard_shutdown: "Force shut down",
+  clean_reboot: "Reboot",
+  hard_reboot: "Force reboot",
+  suspend: "Suspend",
+  resume: "Resume",
+  pause: "Pause",
+  unpause: "Unpause",
+};
+
+const SR_OPERATIONS: Record<string, string> = {
+  repair: "Repair",
+  detach: "Detach",
+  forget: "Forget",
+  destroy: "Destroy",
+  setDefault: "Set as default",
+  trim: "Reclaim freed space",
+};
+
+type Fields = XenActionFields & Record<string, unknown>;
+const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+const vmObj = (f: Fields, ref?: unknown): TaskObject => ({ class: "VM", ref: str(ref ?? f.vmRef) });
+const hostObj = (f: Fields): TaskObject => ({ class: "host", ref: str(f.hostRef) });
+const srObj = (f: Fields): TaskObject => ({ class: "SR", ref: str(f.srRef) });
+
+/**
+ * The actions Recent Tasks lists: what takes a while or changes how something
+ * runs -- not renames and the like. The job a started job is followed by.
+ */
+const TRACKED_ACTIONS: Record<string, { operation: (f: Fields) => string; object: (f: Fields) => TaskObject; job?: JobKind }> = {
+  vm_power: { operation: (f) => POWER_OPERATIONS[String(f.powerAction)] ?? "Change power state", object: (f) => vmObj(f) },
+  vm_start_on: { operation: () => "Start on server", object: (f) => vmObj(f) },
+  vm_delete: { operation: () => "Delete", object: (f) => vmObj(f) },
+  vm_migrate: { operation: () => "Migrate", object: (f) => vmObj(f) },
+  pool_wlb_apply: { operation: () => "Migrate (WLB recommendation)", object: (f) => vmObj(f) },
+  vm_create: { operation: () => "Create VM", object: (f) => ({ class: "VM", name: str(f.nameLabel) ?? str(f.name) }) },
+  vm_create_wizard: { operation: () => "Create VM", object: (f) => ({ class: "VM", name: str(f.nameLabel) ?? str(f.name) }) },
+  vm_copy: { operation: () => "Copy", object: (f) => vmObj(f) },
+  vm_snapshot_create: { operation: () => "Take snapshot", object: (f) => vmObj(f) },
+  vm_snapshot_revert: { operation: () => "Revert to snapshot", object: (f) => vmObj(f) },
+  vm_snapshot_to_template: { operation: () => "Save as template", object: (f) => vmObj(f, f.snapshotRef) },
+  vm_convert_to_template: { operation: () => "Convert to template", object: (f) => vmObj(f) },
+  vm_import_finish: { operation: () => "Import", object: (f) => vmObj(f) },
+  vm_export_ssh: { operation: () => "Export", object: (f) => ({ class: "VM", name: str(f.vmName) }), job: "export" },
+  vdi_export_ssh: { operation: () => "Export disk", object: (f) => ({ class: "VM", name: str(f.vdiName) }), job: "export" },
+  vm_memory_change: {
+    operation: () => "Change memory",
+    object: (f) => {
+      const refs = Array.isArray(f.vmRefs) ? f.vmRefs.filter((r): r is string => typeof r === "string") : [];
+      return refs.length === 1 ? { class: "VM", ref: refs[0] } : { class: "pool", name: `${refs.length} VMs` };
+    },
+    job: "vm-memory",
+  },
+  host_evacuate: { operation: () => "Evacuate", object: hostObj },
+  host_disable: { operation: () => "Disable", object: hostObj },
+  host_enable: { operation: () => "Enable", object: hostObj },
+  host_maintenance_enter: { operation: () => "Enter maintenance mode", object: hostObj, job: "maintenance" },
+  host_maintenance_exit: { operation: () => "Exit maintenance mode", object: hostObj },
+  host_restart_toolstack: { operation: () => "Restart toolstack", object: hostObj },
+  host_shutdown: { operation: () => "Shut down", object: hostObj },
+  host_reboot: { operation: () => "Reboot", object: hostObj },
+  host_control_domain_memory: { operation: () => "Change control domain memory", object: hostObj, job: "dom0" },
+  pool_designate_coordinator: { operation: () => "Make pool coordinator", object: hostObj, job: "maintenance" },
+  pool_add_server: { operation: () => "Add server", object: (f) => ({ class: "host", name: str(f.address) }), job: "pool-member" },
+  pool_remove_server: { operation: () => "Remove server", object: hostObj, job: "pool-member" },
+  network_management_change: { operation: () => "Change management interface", object: (f) => (str(f.hostRef) ? hostObj(f) : { class: "pool" }), job: "network" },
+  sr_command: { operation: (f) => SR_OPERATIONS[String(f.command)] ?? "SR command", object: srObj },
+  sr_create: { operation: () => "Create SR", object: (f) => ({ class: "SR", name: str(f.nameLabel) ?? str(f.name) }) },
+  sr_iscsi_create: { operation: () => "Create SR", object: (f) => ({ class: "SR", name: str(f.nameLabel) ?? str(f.name) }) },
+  sr_scan: { operation: () => "Rescan", object: srObj },
+};
+
+/** Listed from the start, so a long action shows as running while it runs. */
+function trackStart(request: NextRequest, fields: XenActionFields, poolId: string | undefined) {
+  const f = fields as Fields;
+  const spec = f.action ? TRACKED_ACTIONS[f.action] : undefined;
+  // Exports name their pool themselves.
+  const pool = poolId ?? (spec?.job === "export" ? str(f.hostId) : undefined);
+  if (!spec || !pool) return null;
+  const { actor } = actorOf(request);
+  if (actor === "-") return null;
+  return trackAction({
+    poolId: pool,
+    actor,
+    action: f.action!,
+    operation: spec.operation(f),
+    object: spec.object(f),
+    hostRefs: [str(f.hostRef), str(f.targetHostRef)].filter((r): r is string => !!r),
+  });
+}
+
+/** What became of it: a XenServer task or a job to follow, done, failed -- or no task at all. */
+async function trackEnd(t: ReturnType<typeof trackAction>, action: string, response: Response) {
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await response.clone().json()) as Record<string, unknown>;
+  } catch {
+    // no body
+  }
+  // Refused, invalid, or a question back: not a task.
+  if ([400, 401, 403, 404, 499].includes(response.status) || body.needsConfirm) {
+    dropAction(t);
+    return;
+  }
+  if (!response.ok) {
+    settleAction(t, "failed", typeof body.error === "string" ? body.error : `HTTP ${response.status}`);
+    return;
+  }
+  const job = TRACKED_ACTIONS[action]?.job;
+  const jobId = typeof body.jobId === "string" ? body.jobId : (body.job as { id?: unknown } | undefined)?.id;
+  if (typeof body.taskRef === "string" && isXenRef(body.taskRef)) {
+    t.link = { kind: "task", ref: body.taskRef };
+    markLinkedTask(body.taskRef);
+  }
+  else if (job && typeof jobId === "string") t.link = { kind: "job", job, id: jobId };
+  else settleAction(t, "done");
+}
+
 export async function POST(request: NextRequest) {
   // Peek at the body for audit metadata. dispatch() consumes the real body, so
   // the clone is what keeps both readers happy.
@@ -3908,7 +4055,10 @@ export async function POST(request: NextRequest) {
   // for connect, its host id) belongs to: the certificates checked are that pool's.
   const fieldsRef = xapiRefOf(fields.sessionRef);
   const poolId = fields.action === "connect" ? fields.hostId : fieldsRef ? lookupSession(fieldsRef)?.hostId : undefined;
+  // Recent Tasks: a longer action is listed while it runs, with who started it.
+  const tracked = trackStart(request, fields, poolId);
   const response = poolId ? await withPool(poolId, () => dispatch(request)) : await dispatch(request);
+  if (tracked) await trackEnd(tracked, fields.action!, response);
   const action = fields.action;
 
   // 499 means the client vanished mid-request (an aborted event long-poll):

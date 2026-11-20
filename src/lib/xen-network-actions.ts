@@ -6,6 +6,8 @@
 // first, so a refused request writes nothing. Where XenMan refuses more than
 // XenCenter does, the comment says so.
 
+import { markInternalTask } from "./task-registry";
+
 type Rec = Record<string, unknown>;
 type Recs = Record<string, Rec>;
 
@@ -657,6 +659,7 @@ function hostsCoordinatorLast(r: BondRecords): string[] {
  */
 export async function asyncCall(call: XapiCall, method: string, params: unknown[], waitMs = 180_000, everyMs = 500): Promise<string> {
   const task = await call<string>(`Async.${method}`, params);
+  markInternalTask(task);
   const until = Date.now() + waitMs;
   for (;;) {
     await new Promise((res) => setTimeout(res, everyMs));

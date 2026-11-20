@@ -72,6 +72,7 @@ import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { PerfCharts } from "@/components/perf-charts";
 import { VmPowerState, XenVM } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
+import { RecentTasks } from "@/components/recent-tasks";
 
 function formatUptime(unixTimestamp: number): string {
   const now = Date.now() / 1000;
@@ -851,6 +852,7 @@ export function XenHostDetail() {
               </CardContent>
             </Card>
 
+            <RecentTasks hostId={hostId} hostRef={xenHostRef} />
           </TabsContent>
 
           {/* ── Network Tab ── */}

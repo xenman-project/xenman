@@ -88,6 +88,7 @@ import { VmPowerState, XenHostRecord } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
 import { ImportVmDialog } from "@/components/vm/import-vm-dialog";
 import { SrActionsMenu, useSrStates } from "@/components/storage/sr-actions";
+import { RecentTasks } from "@/components/recent-tasks";
 
 const VM_COLORS = [
   "bg-blue-500",
@@ -1200,6 +1201,7 @@ export function HostDetail() {
                 </CardContent>
               </Card>
             )}
+            <RecentTasks hostId={hostId} />
           </TabsContent>
 
           {/* ── Storage Tab ── */}

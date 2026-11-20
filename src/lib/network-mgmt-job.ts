@@ -12,6 +12,7 @@ import type { UserRole } from "./auth";
 import { loadHostsFromDisk, saveHostsToDisk } from "./host-storage";
 import { loginToHost, logout, xenApiCall } from "./xen-client";
 import { XapiTaskError, type ManagementPlan } from "./xen-network-actions";
+import { markInternalTask } from "./task-registry";
 
 export type StepState = "pending" | "running" | "done" | "failed" | "skipped";
 
@@ -144,6 +145,7 @@ async function run(job: MgmtJob, ctx: MgmtContext, plan: ManagementPlan) {
   // fails for a while: then XenMan looks for it under its new address.
   const follow = async (method: string, params: unknown[]): Promise<string> => {
     const task = await call<string>(`Async.${method}`, params);
+    markInternalTask(task);
     const until = Date.now() + WAIT_MS;
     let failingSince = 0;
     for (;;) {

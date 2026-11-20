@@ -33,6 +33,7 @@ import { xenApiCall } from "./xen-client";
 import { asyncCall, XapiTaskError, type XapiCall } from "./xen-network-actions";
 import { call as poolCall, closePoolSession, openPoolSession } from "./xen-updates";
 import { coordinatorCandidates, coordinatorChangeBlocked, type CoordinatorCandidate } from "./pool-coordinator";
+import { markInternalTask } from "./task-registry";
 
 type Rec = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -142,6 +143,7 @@ export async function coordinatorOptions(call: XapiCall, hostRef: string) {
  */
 async function designate(poolId: string, call: XapiCall, to: CoordinatorCandidate) {
   const task = await call<string>("Async.pool.designate_new_master", [to.ref]);
+  markInternalTask(task);
   const until = Date.now() + DESIGNATE_MS;
   for (;;) {
     await new Promise((r) => setTimeout(r, 500));

@@ -18,6 +18,7 @@ import { CertMismatchError } from "./host-trust";
 import { learnPool } from "./host-trust-learn";
 import { describeRef } from "./ref-names";
 import { reachableAt } from "./nat";
+import { markInternalTask } from "./task-registry";
 
 export interface PoolSession {
   hostId: string;
@@ -466,6 +467,7 @@ export function startSync(
       s = await openPoolSession(hostId);
       const pools = await call<string[]>(s, "pool.get_all");
       const task = await call<string>(s, "Async.pool.sync_updates", pools[0], false, "", "", "", "");
+      markInternalTask(task);
       await awaitTask(s, task, 30 * 60 * 1000);
       cache.delete(hostId);
       syncs.set(hostId, { ...state, state: "done", finishedAt: new Date().toISOString() });
