@@ -20,6 +20,8 @@ interface PlanHost {
   isCoordinator: boolean;
   updates: number;
   steps: { kind: string; label: string }[];
+  /** Optional tasks not performed, live patches. */
+  notes?: string[];
 }
 
 interface Plan {
@@ -32,6 +34,8 @@ interface Plan {
   vgpuVms?: number;
   /** Running VMs without the VM Tools there: they cannot be live-migrated. */
   noToolsVms?: number;
+  /** Tasks only full effectiveness asks, per host. */
+  fullTasks?: { host: string; tasks: string[] }[];
   /** Whether a mail at the end can reach anyone. */
   mail?: { smtpConfigured: boolean; adminsWithEmail: number };
 }
@@ -60,6 +64,8 @@ export function XenUpdateDialog({
   const [vgpuShutdown, setVgpuShutdown] = useState(false);
   // Off unless chosen: each VM without the tools goes down briefly.
   const [noToolsRestart, setNoToolsRestart] = useState(false);
+  // Off unless chosen: XenServer counts these tasks as optional.
+  const [fullEffectiveness, setFullEffectiveness] = useState(false);
   const [skipFailingHosts, setSkipFailingHosts] = useState(true);
   const [mail, setMail] = useState(true);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -73,9 +79,20 @@ export function XenUpdateDialog({
       fetch("/api/xen-updates/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hostId, target, automatic, moveVmsBack, evacuateAlways, vgpuShutdown, noToolsRestart, dryRun, ...extra }),
+        body: JSON.stringify({
+          hostId,
+          target,
+          automatic,
+          moveVmsBack,
+          evacuateAlways,
+          vgpuShutdown,
+          noToolsRestart,
+          fullEffectiveness,
+          dryRun,
+          ...extra,
+        }),
       }),
-    [hostId, target, automatic, moveVmsBack, evacuateAlways, vgpuShutdown, noToolsRestart],
+    [hostId, target, automatic, moveVmsBack, evacuateAlways, vgpuShutdown, noToolsRestart, fullEffectiveness],
   );
 
   useEffect(() => {
@@ -119,6 +136,12 @@ export function XenUpdateDialog({
 
   const blocked = !plan || plan.blockers.length > 0;
   const restarts = plan?.hosts.some((h) => h.steps.some((s) => s.kind === "reboot")) ?? false;
+  // "Restart host: xs-01, xs-02." per task.
+  const fullHint = (() => {
+    const byTask = new Map<string, string[]>();
+    for (const x of plan?.fullTasks ?? []) for (const t of x.tasks) byTask.set(t, [...(byTask.get(t) ?? []), x.host]);
+    return [...byTask].map(([t, hosts]) => `${t}: ${hosts.join(", ")}.`).join(" ");
+  })();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -138,6 +161,23 @@ export function XenUpdateDialog({
               <Switch id="xu-auto" checked={automatic} onCheckedChange={setAutomatic} />
               <Label htmlFor="xu-auto">Restart hosts and toolstacks automatically when required</Label>
             </div>
+            {/* Only where it matters: a host has tasks only full effectiveness asks. */}
+            {fullHint && (
+              <div className="flex items-start gap-2">
+                <Switch
+                  id="xu-full"
+                  checked={automatic && fullEffectiveness}
+                  onCheckedChange={setFullEffectiveness}
+                  disabled={!automatic}
+                />
+                <Label htmlFor="xu-full" className="block leading-snug">
+                  Also perform tasks for full effectiveness
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    {fullHint} Required only for specific hardware or features.
+                  </span>
+                </Label>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <Switch id="xu-away" checked={evacuateAlways} onCheckedChange={setEvacuateAlways} />
               <Label htmlFor="xu-away">Evacuate each host before installing updates</Label>
@@ -222,6 +262,11 @@ export function XenUpdateDialog({
                       <li key={j}>{s.label}</li>
                     ))}
                   </ol>
+                  {(h.notes ?? []).map((n) => (
+                    <p key={n} className="ml-6 text-xs text-muted-foreground">
+                      {n}
+                    </p>
+                  ))}
                 </div>
               ))}
               {(plan.finalSteps ?? []).length > 0 && (

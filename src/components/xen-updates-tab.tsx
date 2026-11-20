@@ -46,6 +46,7 @@ interface XenUpdate {
   issued: string | null;
   url: string | null;
   guidance: Guidance | null;
+  fullGuidance?: Guidance | null;
   hosts: string[];
 }
 
@@ -59,8 +60,12 @@ interface HostState {
   updates: string[];
   highSeverity: number;
   guidance: Guidance[];
+  fullGuidance?: Guidance[];
   livepatches: number;
+  livepatchComponents?: string[];
   pending: string[];
+  pendingRecommended?: string[];
+  pendingFull?: string[];
   lastUpdated: string | null;
 }
 
@@ -121,13 +126,18 @@ const GUIDANCE_TEXT: Record<Guidance, string> = {
   RestartDeviceModel: "Restart VMs",
 };
 
-/** host.pending_guidances: what an earlier installation left to do. */
+/** host.pending_guidances*: what an earlier installation left to do. */
 function pendingText(p: string): string {
+  if (p === "reboot_host_on_livepatch_failure") return "Restart host (live patch failed)";
   if (p.startsWith("reboot_host")) return "Restart host";
   if (p === "restart_toolstack") return "Restart toolstack";
   if (p === "restart_device_model" || p === "restart_vm") return "Restart VMs";
   return p.replace(/_/g, " ");
 }
+
+const pendingList = (ps: string[]) => [...new Set(ps.map(pendingText))].join(", ");
+
+const componentName = (c: string) => (c.toLowerCase() === "xen" ? "Xen" : c.charAt(0).toUpperCase() + c.slice(1));
 
 const TYPE_TEXT: Record<string, string> = {
   SecurityFix: "Security fix",
@@ -360,13 +370,36 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                               {GUIDANCE_TEXT[g]}
                             </Badge>
                           ))}
+                        {h.updates.length > 0 && (h.fullGuidance ?? []).length > 0 && (
+                          <Badge variant="outline" className="font-normal text-muted-foreground">
+                            Full effectiveness: {h.fullGuidance!.map((g) => GUIDANCE_TEXT[g]).join(", ")}
+                          </Badge>
+                        )}
+                        {h.updates.length > 0 && h.livepatches > 0 && (
+                          <Badge variant="outline" className="font-normal text-muted-foreground">
+                            Live patch{(h.livepatchComponents ?? []).length > 0 && `: ${h.livepatchComponents!.map(componentName).join(", ")}`}
+                          </Badge>
+                        )}
                         {h.pending.length > 0 && (
                           <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-700 dark:text-amber-400">
                             <RotateCcw className="h-3 w-3" />
-                            Pending: {[...new Set(h.pending.map(pendingText))].join(", ")}
+                            Pending: {pendingList(h.pending)}
                           </Badge>
                         )}
                       </>
+                    )}
+                    {/* Optional, so also next to "Up to date". */}
+                    {h.live && (h.pendingRecommended ?? []).length > 0 && (
+                      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                        <RotateCcw className="h-3 w-3" />
+                        Pending (recommended): {pendingList(h.pendingRecommended!)}
+                      </Badge>
+                    )}
+                    {h.live && (h.pendingFull ?? []).length > 0 && (
+                      <Badge variant="outline" className="gap-1 font-normal text-muted-foreground">
+                        <RotateCcw className="h-3 w-3" />
+                        Pending (full effectiveness): {pendingList(h.pendingFull!)}
+                      </Badge>
                     )}
                     {!h.enabled && h.live && <Badge variant="outline">Maintenance mode</Badge>}
                   </div>
@@ -418,6 +451,11 @@ export function XenUpdatesTab({ hostId, hostRef, isAdmin }: { hostId: string; ho
                           )}
                           {u.type && <Badge variant="secondary" className="font-normal">{TYPE_TEXT[u.type] ?? u.type}</Badge>}
                           {u.guidance && <Badge variant="outline" className="font-normal">{GUIDANCE_TEXT[u.guidance]}</Badge>}
+                          {u.fullGuidance && (
+                            <Badge variant="outline" className="font-normal text-muted-foreground">
+                              Full effectiveness: {GUIDANCE_TEXT[u.fullGuidance]}
+                            </Badge>
+                          )}
                         </div>
                       </button>
                       {expanded && (

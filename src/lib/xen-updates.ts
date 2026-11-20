@@ -182,6 +182,8 @@ export interface XenUpdate {
   issued: string | null;
   url: string | null;
   guidance: Guidance | null;
+  /** Needed only for full effectiveness (specific hardware or features). */
+  fullGuidance: Guidance | null;
   livepatchGuidance: string | null;
   /** Hosts this update is still missing on. */
   hosts: string[];
@@ -200,9 +202,16 @@ export interface HostUpdateState {
   highSeverity: number;
   /** What installing them needs, from the metadata. */
   guidance: Guidance[];
+  /** What only full effectiveness needs; optional, beyond `guidance`. */
+  fullGuidance: Guidance[];
   livepatches: number;
-  /** Left over from an earlier installation and still to be done. */
+  /** Components the live patches are for, e.g. "xen", "kernel". */
+  livepatchComponents: string[];
+  /** Left over from an earlier installation and still to be done (mandatory). */
   pending: string[];
+  /** Left over, recommended (also a failed live patch) and for full effectiveness. */
+  pendingRecommended: string[];
+  pendingFull: string[];
   latestApplied: "yes" | "no" | "unknown";
   lastUpdated: string | null;
 }
@@ -237,16 +246,20 @@ const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeo
  * earlier releases wrote `recommended-guidance` / `absolute-guidance`. Both are
  * read. Mandatory counts too: XenServer will not let the host out of
  * maintenance mode before what is mandatory has been done.
+ *
+ * `full`: what only full effectiveness needs -- for specific hardware or
+ * features, so optional. Less what mandatory and recommended already ask.
  */
-function guidanceOf(x: Record<string, unknown> | undefined): Guidance[] {
+function guidanceOf(x: Record<string, unknown> | undefined, which: "required" | "full" = "required"): Guidance[] {
   if (!x) return [];
+  const g = x.guidance && typeof x.guidance === "object" && !Array.isArray(x.guidance) ? (x.guidance as Record<string, unknown>) : null;
   const found = new Set<string>();
-  const g = x.guidance;
-  if (g && typeof g === "object" && !Array.isArray(g)) {
-    for (const kind of ["mandatory", "recommended"]) for (const v of list((g as Record<string, unknown>)[kind])) found.add(v);
-  }
+  if (g) for (const kind of ["mandatory", "recommended"]) for (const v of list(g[kind])) found.add(v);
   for (const v of [...list(x["recommended-guidance"]), ...list(x["absolute-guidance"])]) found.add(v);
-  return RANK.filter((r) => found.has(r));
+  const required = RANK.filter((r) => found.has(r));
+  if (which === "required") return required;
+  const full = new Set(g ? list(g.full) : []);
+  return RANK.filter((r) => full.has(r) && !required.includes(r));
 }
 
 /** XAPI datetimes come as "20260930T10:00:00Z"; the epoch means "never". */
@@ -350,6 +363,7 @@ export async function readPoolUpdates(hostId: string): Promise<PoolUpdates> {
       issued: anyDate(u.issued),
       url: [u.URL, u.url].find((v): v is string => typeof v === "string" && /^https?:\/\//.test(v)) ?? null,
       guidance: guidanceOf(u)[0] ?? null,
+      fullGuidance: guidanceOf(u, "full")[0] ?? null,
       livepatchGuidance: u["livepatch-guidance"] ? String(u["livepatch-guidance"]) : null,
       hosts: [],
     }));
@@ -372,8 +386,18 @@ export async function readPoolUpdates(hostId: string): Promise<PoolUpdates> {
           updates: ids,
           highSeverity: ids.filter((id) => byId.get(id)?.severity === "High").length,
           guidance: guidanceOf(info),
+          fullGuidance: guidanceOf(info, "full"),
           livepatches: ((info?.livepatches as unknown[]) || []).length,
+          livepatchComponents: [
+            ...new Set(
+              ((info?.livepatches as unknown[]) || [])
+                .map((lp) => (lp && typeof lp === "object" ? String((lp as Record<string, unknown>).component ?? "") : ""))
+                .filter(Boolean),
+            ),
+          ],
           pending: ((h.pending_guidances as string[]) || []).map(String),
+          pendingRecommended: ((h.pending_guidances_recommended as string[]) || []).map(String),
+          pendingFull: ((h.pending_guidances_full as string[]) || []).map(String),
           latestApplied: (["yes", "no"].includes(String(h.latest_synced_updates_applied)) ? h.latest_synced_updates_applied : "unknown") as "yes" | "no" | "unknown",
           lastUpdated: xapiDate(h.last_software_update),
         };

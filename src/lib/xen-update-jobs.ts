@@ -31,6 +31,7 @@ import {
   SETTLED,
   StopRequested,
   TaskTimeout,
+  type Guidance,
   type HostUpdateState,
   type PoolSession,
   type PoolUpdates,
@@ -183,6 +184,12 @@ export interface JobOptions {
    */
   noToolsRestart?: boolean;
   /**
+   * Also do what only full effectiveness asks (XenServer's third level of
+   * update tasks, for specific hardware or features), on hosts being updated.
+   * Off by default; only with automatic restarts.
+   */
+  fullEffectiveness?: boolean;
+  /**
    * A pool update does not stop at a host that keeps failing: its step is
    * tried again after a pause; then the host is put back in service and
    * skipped, the others go on, and it is tried once more at the end.
@@ -254,7 +261,17 @@ export interface Job {
 }
 
 export interface Plan {
-  hosts: { ref: string; name: string; isCoordinator: boolean; updates: number; steps: Omit<JobStep, "id" | "state">[] }[];
+  hosts: {
+    ref: string;
+    name: string;
+    isCoordinator: boolean;
+    updates: number;
+    steps: Omit<JobStep, "id" | "state">[];
+    /** Optional tasks not performed, live patches. */
+    notes?: string[];
+  }[];
+  /** Tasks only full effectiveness asks, per host: what the option would add. */
+  fullTasks?: { host: string; tasks: string[] }[];
   /** Steps for the whole pool, after the last host. */
   finalSteps: string[];
   /** Reasons not to start; empty means it may. */
@@ -366,13 +383,24 @@ function prune() {
  * What a host needs. XAPI refuses to install while anything an earlier
  * installation asked for is still pending on the host (pending_guidances), so
  * that is done first; what the new updates ask for comes after them.
+ *
+ * With automatic restarts, what an earlier installation left recommended (a
+ * failed live patch among it) is done after installing too, and with
+ * `fullEffectiveness` also what only full effectiveness needs -- in both cases
+ * only on a host that is updated anyway.
  */
-function needs(h: HostUpdateState) {
+function needs(h: HostUpdateState, o?: Pick<JobOptions, "automatic" | "fullEffectiveness">) {
   const install = h.updates.length > 0;
+  const full = install && !!o?.automatic && !!o.fullEffectiveness;
+  const guidance = full ? [...h.guidance, ...(h.fullGuidance ?? [])] : h.guidance;
+  const later = [
+    ...(install && o?.automatic ? (h.pendingRecommended ?? []) : []),
+    ...(full ? (h.pendingFull ?? []) : []),
+  ];
   const preReboot = h.pending.some((p) => p.startsWith("reboot_host"));
   const preToolstack = !preReboot && h.pending.includes("restart_toolstack");
-  const postReboot = install && h.guidance.includes("RebootHost");
-  const postToolstack = install && !postReboot && h.guidance.includes("RestartToolstack");
+  const postReboot = install && (guidance.includes("RebootHost") || later.some((p) => p.startsWith("reboot_host")));
+  const postToolstack = install && !postReboot && (guidance.includes("RestartToolstack") || later.includes("restart_toolstack"));
   return {
     install,
     preReboot,
@@ -380,19 +408,75 @@ function needs(h: HostUpdateState) {
     postReboot,
     postToolstack,
     reboot: preReboot || postReboot,
-    evacuate: preReboot || postReboot || (install && h.guidance.includes("EvacuateHost")),
+    evacuateGuided: install && guidance.includes("EvacuateHost"),
+    evacuate: preReboot || postReboot || (install && guidance.includes("EvacuateHost")),
     // Only VMs restarting fixes this; XenMan does not restart VMs.
     pendingVmRestart: h.pending.includes("restart_device_model"),
-    vmRestart: install && h.guidance.includes("RestartDeviceModel"),
+    vmRestart: install && guidance.includes("RestartDeviceModel"),
   };
+}
+
+const TASK_TEXT: Record<Guidance, string> = {
+  RebootHost: "Restart host",
+  RestartToolstack: "Restart toolstack",
+  EvacuateHost: "Evacuate host",
+  RestartDeviceModel: "Restart VMs",
+};
+
+/** A pending guidance (host.pending_guidances*) as the metadata names it. */
+function guidanceOfPending(p: string): Guidance | null {
+  if (p.startsWith("reboot_host")) return "RebootHost";
+  if (p === "restart_toolstack") return "RestartToolstack";
+  if (p === "restart_device_model" || p === "restart_vm") return "RestartDeviceModel";
+  return null;
+}
+
+/**
+ * What only full effectiveness asks of a host being updated, beyond what is
+ * done anyway: optional, done only when chosen.
+ */
+function fullTasksOf(h: HostUpdateState, o: JobOptions): Guidance[] {
+  if (h.updates.length === 0) return [];
+  const asked = new Set<Guidance>([
+    ...(h.fullGuidance ?? []),
+    ...(h.pendingFull ?? []).map(guidanceOfPending).filter((g): g is Guidance => g !== null),
+  ]);
+  const n = needs(h, { automatic: o.automatic, fullEffectiveness: false });
+  if (n.reboot) ["RebootHost", "RestartToolstack", "EvacuateHost"].forEach((g) => asked.delete(g as Guidance));
+  if (n.postToolstack || n.preToolstack) asked.delete("RestartToolstack");
+  if (n.evacuate || o.evacuateAlways) asked.delete("EvacuateHost");
+  if (n.vmRestart) asked.delete("RestartDeviceModel");
+  return (["RebootHost", "EvacuateHost", "RestartToolstack", "RestartDeviceModel"] as Guidance[]).filter((g) => asked.has(g));
+}
+
+const componentName = (c: string) => (c.toLowerCase() === "xen" ? "Xen" : c.charAt(0).toUpperCase() + c.slice(1));
+
+/** Notes under a host in the plan: optional tasks left out, live patches. */
+function hostNotes(h: HostUpdateState, o: JobOptions): string[] {
+  const notes: string[] = [];
+  const full = fullTasksOf(h, o);
+  if (full.length && !(o.automatic && o.fullEffectiveness)) {
+    notes.push(`Not performed: ${full.map((g) => TASK_TEXT[g]).join(", ")} (full effectiveness)`);
+  }
+  const components = h.livepatchComponents ?? [];
+  if (h.updates.length > 0 && (components.length || (h.livepatches ?? 0) > 0)) {
+    const what = components.length ? `Live patches: ${components.map(componentName).join(", ")}.` : "Live patches included.";
+    const n = needs(h, o);
+    notes.push(
+      n.postReboot
+        ? what
+        : `${what} ${o.automatic ? "The host is restarted if a live patch fails." : "A host restart is required if a live patch fails."}`,
+    );
+  }
+  return notes;
 }
 
 /** `vgpus`: running VMs with a vGPU on the host now; `noTools`: running VMs without the VM Tools. */
 function stepsFor(h: HostUpdateState, o: JobOptions, vgpus = 0, noTools = 0): Omit<JobStep, "id" | "state">[] {
-  const n = needs(h);
+  const n = needs(h, o);
   const s = (kind: JobStep["kind"], label: string) => ({ host: h.ref, hostName: h.name, kind, label });
   const evacuate =
-    n.postReboot || (o.automatic && n.preReboot) || (n.install && h.guidance.includes("EvacuateHost")) || o.evacuateAlways;
+    n.postReboot || (o.automatic && n.preReboot) || n.evacuateGuided || o.evacuateAlways;
   const shutDown = evacuate && o.vgpuShutdown && vgpus > 0;
   const steps = [s("maintenance", evacuate ? "Enter maintenance mode" : "Disable host")];
   if (shutDown) steps.push(s("vgpu-off", vgpuOffLabel(vgpus)));
@@ -672,7 +756,7 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
     }
   }
   for (const h of hosts) {
-    const n = needs(h);
+    const n = needs(h, o);
     if (n.install && n.pendingVmRestart) {
       blockers.push(`${h.name} has VMs pending restart from a previous update. No further updates can be installed until they are restarted.`);
     }
@@ -697,6 +781,9 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
     warnings,
     vgpuVms,
     noToolsVms: [...noToolsBy.values()].reduce((a, b) => a + b, 0),
+    fullTasks: hosts
+      .map((h) => ({ host: h.name, tasks: fullTasksOf(h, o).map((g) => TASK_TEXT[g]) }))
+      .filter((x) => x.tasks.length > 0),
     ...poolShape(
       target,
       o,
@@ -706,6 +793,7 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
         isCoordinator: h.isCoordinator,
         updates: h.updates.length,
         steps: stepsFor(h, o, vgpusOn(h), noToolsBy.get(h.ref) ?? 0),
+        notes: hostNotes(h, o),
       })),
     ),
   };
@@ -1079,10 +1167,21 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
    * What the host itself now says is left to do. The metadata may not have
    * said -- and XenServer will not let a host out of maintenance mode while
    * anything mandatory is pending -- so the steps for it are added here.
+   *
+   * With automatic restarts, what is recommended is done too (XenServer lists a
+   * failed live patch there, as a host restart), and with the option what only
+   * full effectiveness needs. Older XenServer releases have neither list.
    */
   const followPending = async (applied: JobStep) => {
     const h = applied.host!;
-    const pending = await c.call<string[]>("host.get_pending_guidances", h).catch(() => [] as string[]);
+    const list = (field: string) => c.call<string[]>(`host.get_${field}`, h).catch(() => [] as string[]);
+    const mandatory = await list("pending_guidances");
+    const recommended = await list("pending_guidances_recommended");
+    const full = await list("pending_guidances_full");
+    const auto = job.options.automatic;
+    const withFull = auto && !!job.options.fullEffectiveness;
+    const livepatchFailed = recommended.includes("reboot_host_on_livepatch_failure");
+    const pending = [...mandatory, ...(auto ? recommended : []), ...(withFull ? full : [])];
     const at = job.steps.indexOf(applied);
     const later = job.steps.slice(at + 1).filter((x) => x.host === h);
     const has = (kind: JobStep["kind"]) => later.some((x) => x.kind === kind);
@@ -1090,6 +1189,22 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     const toolstack = !reboot && pending.includes("restart_toolstack");
     if (pending.includes("restart_device_model") || pending.includes("restart_vm")) {
       job.notes.push(`VMs on ${applied.hostName} must be restarted for the update to take effect.`);
+    }
+    if (!auto && livepatchFailed) {
+      job.notes.push(`Live patch failed on ${applied.hostName}. Restart the host to complete the update.`);
+    }
+    // Said, not done: optional, and not chosen.
+    const fullLeft = withFull
+      ? []
+      : [...new Set(full.map(guidanceOfPending).filter((g): g is Guidance => g !== null))].filter((g) => {
+          // What a restart done anyway covers.
+          if (reboot || has("reboot")) return g === "RestartDeviceModel";
+          return !(g === "RestartToolstack" && (toolstack || has("toolstack")));
+        });
+    if (fullLeft.length) {
+      job.notes.push(
+        `Tasks for full effectiveness not performed on ${applied.hostName}: ${fullLeft.map((g) => TASK_TEXT[g]).join(", ")}.`,
+      );
     }
     if (!reboot && !toolstack) return;
     if ((reboot && has("reboot")) || (toolstack && (has("toolstack") || has("reboot")))) return;
@@ -1113,7 +1228,14 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
     const vgpus = reboot && !evacuated && job.options.vgpuShutdown ? ((await vgpuFacts(await c.get())).vms.get(h)?.length ?? 0) : 0;
     if (vgpus) insert.push(mk("vgpu-off", vgpuOffLabel(vgpus)));
     if (reboot && !evacuated) insert.push(mk("evacuate", "Evacuate host"));
-    insert.push(reboot ? mk("reboot", "Restart host (required by the update)") : mk("toolstack", "Restart toolstack (required by the update)"));
+    // Why: the strongest reason the host gives.
+    const why = (p: (x: string) => boolean) =>
+      mandatory.some(p) ? "required by the update" : livepatchFailed && reboot ? "live patch failed" : recommended.some(p) ? "recommended" : "full effectiveness";
+    insert.push(
+      reboot
+        ? mk("reboot", `Restart host (${why((x) => x.startsWith("reboot_host"))})`)
+        : mk("toolstack", `Restart toolstack (${why((x) => x === "restart_toolstack")})`),
+    );
     job.steps.splice(at + 1, 0, ...insert);
     const enableAt = () => job.steps.findIndex((x, i) => i > at && x.host === h && x.kind === "enable");
     if (reboot && !evacuated && job.options.moveVmsBack) {
