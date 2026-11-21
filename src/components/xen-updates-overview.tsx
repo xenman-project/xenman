@@ -26,7 +26,7 @@ interface PoolSummary {
 // starts on Overview otherwise.
 let pendingPoolTab: string | null = null;
 
-function openPoolTabNext(tab: string) {
+export function openPoolTabNext(tab: string) {
   pendingPoolTab = tab;
 }
 
