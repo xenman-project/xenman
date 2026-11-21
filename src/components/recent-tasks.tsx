@@ -35,8 +35,8 @@ export type TaskScope =
 
 /** Log lines shown under a task; the earlier ones on hover. */
 const SHOWN_LINES = 4;
-/** On the dashboard, every pool together. */
-const MAX_ALL = 50;
+/** On the dashboard, every pool together: a cap only against a flood. */
+const MAX_ALL = 1000;
 
 const STATE_STYLE: Record<RecentTask["state"], { label: string; className: string }> = {
   running: { label: "Running", className: "bg-sky-500/10 text-sky-700 border-sky-500/20 dark:text-sky-400" },

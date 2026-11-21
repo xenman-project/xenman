@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { XCircle } from "lucide-react";
 import {
   Dialog,
@@ -65,23 +65,31 @@ export function XenUpdatesConfigDialog({
   const [error, setError] = useState<string | null>(null);
   const [askSync, setAskSync] = useState(false);
 
-  // Each time it opens: the pool's current settings.
+  // The pool's settings as last read -- without starting the dialog over when
+  // they are read again (as after saving, while it asks to synchronize).
+  const configRef = useRef(config);
+  useEffect(() => {
+    configRef.current = config;
+  }, [config]);
+
+  // Each time it opens, and only then: the pool's current settings.
   useEffect(() => {
     if (!open) return;
     const t = setTimeout(() => {
-      setChannel(config.channel ?? OTHER);
-      setSyncEnabled(config.sync.enabled);
-      setFrequency(config.sync.frequency);
-      setDay(config.sync.day);
-      setProxyUrl(config.proxy.url);
-      setProxyUser(config.proxy.username);
+      const c = configRef.current;
+      setChannel(c.channel ?? OTHER);
+      setSyncEnabled(c.sync.enabled);
+      setFrequency(c.sync.frequency);
+      setDay(c.sync.day);
+      setProxyUrl(c.proxy.url);
+      setProxyUser(c.proxy.username);
       setProxyPassword("");
       setPasswordTouched(false);
       setError(null);
       setAskSync(false);
     }, 0);
     return () => clearTimeout(t);
-  }, [open, config]);
+  }, [open]);
 
   const proxyInvalid = proxyUrl.trim() !== "" && !/^https?:\/\/[^\s/?#]+/i.test(proxyUrl.trim());
 

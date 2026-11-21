@@ -55,7 +55,8 @@ export interface SeenTask {
 
 /** How long finished entries stay, and how many entries a pool keeps. */
 export const KEEP_MS = Number(process.env.XENMAN_TASKS_KEEP_MS) || 24 * 60 * 60 * 1000;
-export const MAX_ENTRIES = 30;
+// All of the last 24 hours; the cap only guards against a pool gone wild (XENMAN_TASKS_MAX for tests).
+export const MAX_ENTRIES = Number(process.env.XENMAN_TASKS_MAX) || 500;
 
 const g = globalThis as typeof globalThis & {
   _xenmanTracked?: Map<string, TrackedAction[]>;
@@ -92,7 +93,7 @@ export function dropAction(t: TrackedAction): void {
 export function trackedActions(poolId: string): TrackedAction[] {
   const now = Date.now();
   const list = (tracked.get(poolId) ?? []).filter((t) => fresh(t.startedAt, t.finishedAt, t.state, now));
-  tracked.set(poolId, list.slice(-MAX_ENTRIES * 2));
+  tracked.set(poolId, list.slice(-MAX_ENTRIES));
   return list;
 }
 
