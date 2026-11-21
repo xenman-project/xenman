@@ -627,6 +627,19 @@ async function evacuationProblems(s: PoolSession, hostRef: string, skip: Set<str
   );
 }
 
+/** The VMs on a host a restart would stop: running or paused, the control domain aside. */
+async function runningGuests(s: PoolSession, hostRef: string): Promise<{ vm: string; name: string }[]> {
+  const resident = await call<string[]>(s, "host.get_resident_VMs", hostRef);
+  const out: { vm: string; name: string }[] = [];
+  for (const vm of resident) {
+    const rec = await call<Record<string, unknown>>(s, "VM.get_record", vm).catch(() => null);
+    if (rec && !rec.is_control_domain && (rec.power_state === "Running" || rec.power_state === "Paused")) {
+      out.push({ vm, name: String(rec.name_label ?? vm) });
+    }
+  }
+  return out;
+}
+
 const listStuck = (stuck: Stuck[]) => `${stuck.slice(0, 5).map((x) => x.text).join(", ")}${stuck.length > 5 ? ", …" : ""}`;
 
 /** What a job would do, and what stands in its way -- without changing anything. */
@@ -695,7 +708,21 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
   const skipFor = (h: HostUpdateState) => new Set(o.vgpuShutdown ? (vgpu.vms.get(h.ref) ?? []).map((x) => x.vm) : []);
   if (evacuating.length) {
     if (u.hosts.length < 2) {
-      blockers.push("The update requires a host restart, and no other host is available for running VMs. Shut down the VMs first.");
+      // A single host: nowhere to move VMs to -- in the way only if some run
+      // there (issue #8: refused although every VM was shut down).
+      const s = await openPoolSession(hostId);
+      try {
+        for (const h of evacuating) {
+          const names = (await runningGuests(s, h.ref)).filter((x) => !skipFor(h).has(x.vm)).map((x) => x.name);
+          if (names.length) {
+            blockers.push(
+              `The update requires a host restart, and no other host is available for running VMs. Shut down these VMs first: ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}.`,
+            );
+          }
+        }
+      } finally {
+        await closePoolSession(s);
+      }
     } else {
       const s = await openPoolSession(hostId);
       try {
@@ -1710,9 +1737,17 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
           await released(step);
           const resident = await c.call<string[]>("host.get_resident_VMs", h);
           const running: string[] = [];
+          let guests = 0;
           for (const vm of resident) {
             const rec = await c.call<Record<string, unknown>>("VM.get_record", vm).catch(() => null);
+            if (rec && !rec.is_control_domain) guests++;
             if (rec && !rec.is_control_domain && rec.power_state === "Running") running.push(vm);
+          }
+          // Nothing on it to move: no evacuation asked of XenServer -- which, on
+          // a pool of one host, would have nowhere to send anything (issue #8).
+          if (guests === 0) {
+            end(step, "done", "no running VMs");
+            continue steps;
           }
           for (const vm of running) if (!home.has(vm)) home.set(vm, h);
           // Without the VM Tools: shut down and started on another host first,

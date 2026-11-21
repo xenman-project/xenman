@@ -13,6 +13,7 @@ section of the version it leads to.
 - **Configure Updates**, as in XenCenter: per pool, the update channel (Normal or Early Access), automatic synchronization (daily, or weekly on a chosen day) and a proxy server for the update channel, with XenCenter's calls. After a new channel, synchronizing is offered. The proxy password is kept by XenServer and never sent to the browser. The Updates tab now names the channel as XenCenter does ("Normal" instead of `normal_repo`). Administrators only.
 
 ### Fixed
+- **Updates on a pool of one host were refused** with "no other host is available for running VMs" although every VM was shut down (#8). The update is now refused only while VMs run or are paused on the host, and names them; with none, the host is not evacuated at all.
 - **Updates: a failed live patch went unnoticed.** XenServer then asks for a host restart as a recommended task, which XenMan did not read, so the host kept running without the fix. With automatic restarts the host is now evacuated and restarted; without them, the update says so.
 
 ### Security
