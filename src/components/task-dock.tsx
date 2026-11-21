@@ -36,7 +36,7 @@ function write(key: string, value: string) {
 }
 
 /**
- * Recent Tasks docked at the bottom of every view, as vSphere has it: the
+ * Recent Tasks docked at the bottom of every view: the
  * tasks of what is selected -- a VM, a host, a pool, or every pool on the
  * dashboard -- resizable at its top edge and collapsible to its header row.
  * From Tailwind's `md` up; on a phone the overview shows a card instead.
