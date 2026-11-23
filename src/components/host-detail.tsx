@@ -51,10 +51,6 @@ import {
 import {
   Server,
   Monitor,
-  Power,
-  Pause,
-  Square,
-  CircleDot,
   Cpu,
   MemoryStick,
   HardDrive,
@@ -86,7 +82,7 @@ import { HostNetworking } from "@/components/networking/host-networking";
 import { PerfCharts } from "@/components/perf-charts";
 import { takePendingPoolTab } from "@/components/xen-updates-overview";
 import type { HostConnection } from "@/lib/types";
-import { VmPowerState, XenHostRecord } from "@/lib/types";
+import { XenHostRecord } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
 import { ImportVmDialog } from "@/components/vm/import-vm-dialog";
 import { SrActionsMenu, useSrStates } from "@/components/storage/sr-actions";
@@ -114,20 +110,6 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
-
-const powerStateIcon: Record<VmPowerState, React.ReactNode> = {
-  Running: <Power className="h-3 w-3 text-emerald-500" />,
-  Halted: <Square className="h-3 w-3 text-zinc-400" />,
-  Paused: <Pause className="h-3 w-3 text-amber-500" />,
-  Suspended: <CircleDot className="h-3 w-3 text-amber-500" />,
-};
-
-const powerStateBadge: Record<VmPowerState, string> = {
-  Running: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-  Halted: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
-  Paused: "bg-amber-500/10 text-amber-600 border-amber-500/20",
-  Suspended: "bg-amber-500/10 text-amber-600 border-amber-500/20",
-};
 
 interface ConnInfo {
   host: { address: string; port: number; useSsl: boolean };

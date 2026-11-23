@@ -10,8 +10,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import {
@@ -42,9 +40,6 @@ import {
   Server,
   Monitor,
   Power,
-  Pause,
-  Square,
-  CircleDot,
   Cpu,
   MemoryStick,
   ArrowLeft,
@@ -70,7 +65,7 @@ import { DesignateCoordinatorDialog, EnterMaintenanceDialog } from "@/components
 import { RemoveServerDialog, removeBlockedReason } from "@/components/pool/remove-server-dialog";
 import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { PerfCharts } from "@/components/perf-charts";
-import { VmPowerState, XenVM } from "@/lib/types";
+import { XenVM } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
 import { RecentTasks } from "@/components/recent-tasks";
 import { VmTable } from "@/components/vm/vm-table";
@@ -96,20 +91,6 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
 }
-
-const powerStateIcon: Record<VmPowerState, React.ReactNode> = {
-  Running: <Power className="h-3 w-3 text-emerald-500" />,
-  Halted: <Square className="h-3 w-3 text-zinc-400" />,
-  Paused: <Pause className="h-3 w-3 text-amber-500" />,
-  Suspended: <CircleDot className="h-3 w-3 text-amber-500" />,
-};
-
-const powerStateBadge: Record<VmPowerState, string> = {
-  Running: "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
-  Halted: "bg-zinc-500/10 text-zinc-500 border-zinc-500/20",
-  Paused: "bg-amber-500/10 text-amber-600 border-amber-500/20",
-  Suspended: "bg-amber-500/10 text-amber-600 border-amber-500/20",
-};
 
 // Distinct colors for VM segments in the memory bar
 const VM_COLORS = [
@@ -206,7 +187,6 @@ export function XenHostDetail() {
   const allVms = Object.values(conn.vms);
   const residentVms = allVms.filter((vm) => vm.residentOn === xenHostRef);
   const runningVms = residentVms.filter((vm) => vm.powerState === "Running");
-  const nonRunningVms = residentVms.filter((vm) => vm.powerState !== "Running");
 
   const totalMemory = xenHost.memoryTotal;
   const freeMemory = xenHost.memoryFree;
