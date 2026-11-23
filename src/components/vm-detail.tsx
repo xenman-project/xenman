@@ -242,6 +242,14 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
   const [snapshotTemplate, setSnapshotTemplate] = React.useState<SnapshotInfo | null>(null);
 
   const [guestOsVersion, setGuestOsVersion] = React.useState<string | null>(null);
+  // Virtualization & VM Tools: the agent's and the drivers' versions, from the guest metrics.
+  const [guestTools, setGuestTools] = React.useState<{
+    pvDriversDetected: boolean;
+    agentVersion: string | null;
+    drivers: { name: string; version: string }[];
+    vdaVersion: string | null;
+    pvsTargetVersion: string | null;
+  } | null>(null);
   const [guestIpAddresses, setGuestIpAddresses] = React.useState<string[]>([]);
   const [guestRdpEnabled, setGuestRdpEnabled] = React.useState<boolean | null>(null);
   const [guestMetricsLoaded, setGuestMetricsLoaded] = React.useState<string | null>(null);
@@ -348,6 +356,7 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
         setGuestOsVersion(data.osVersion || null);
         setGuestIpAddresses(data.ipAddresses || []);
         setGuestRdpEnabled(data.rdpEnabled ?? null);
+        setGuestTools(data.tools ?? null);
         setGuestMetricsLoaded(vmRef);
       })
       .catch(() => setGuestMetricsLoaded(vmRef));
@@ -1089,6 +1098,73 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                             ))}
                           </div>
                         </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            {/* As XenCenter's "Virtualization & VM Tools": mode, state, the agent's and the drivers' versions. */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                  <Cpu className="h-4 w-4" />
+                  Virtualization &amp; VM Tools
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell className="w-56 text-zinc-500">Virtualization mode</TableCell>
+                      <TableCell>
+                        {vm.domainType === "hvm"
+                          ? "Hardware-assisted Virtualization (HVM)"
+                          : vm.domainType === "pv"
+                            ? "Paravirtualization (PV)"
+                            : vm.domainType === "pvh"
+                              ? "PVH"
+                              : vm.domainType === "pv_in_pvh"
+                                ? "PV in PVH"
+                                : vm.domainType || "Unknown"}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="text-zinc-500">Virtualization state</TableCell>
+                      <TableCell>
+                        {!guestTools ? (
+                          <span className="text-zinc-500">{vm.powerState === "Running" ? "XenServer VM Tools not detected" : "VM is not running"}</span>
+                        ) : (
+                          <>
+                            <p>{guestTools.pvDriversDetected ? "I/O optimized" : "I/O not optimized"}</p>
+                            <p>{guestTools.agentVersion ? "Management Agent installed" : "Management Agent not installed"}</p>
+                          </>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {guestTools?.agentVersion && (
+                      <TableRow>
+                        <TableCell className="text-zinc-500">Management Agent version</TableCell>
+                        <TableCell className="font-mono text-xs">{guestTools.agentVersion}</TableCell>
+                      </TableRow>
+                    )}
+                    {guestTools?.drivers.map((d) => (
+                      <TableRow key={d.name}>
+                        <TableCell className="text-zinc-500">{d.name} version</TableCell>
+                        <TableCell className="font-mono text-xs">{d.version}</TableCell>
+                      </TableRow>
+                    ))}
+                    {guestTools?.vdaVersion && (
+                      <TableRow>
+                        <TableCell className="text-zinc-500">Citrix VDA version</TableCell>
+                        <TableCell className="font-mono text-xs">{guestTools.vdaVersion}</TableCell>
+                      </TableRow>
+                    )}
+                    {guestTools?.pvsTargetVersion && (
+                      <TableRow>
+                        <TableCell className="text-zinc-500">PVS Target Device version</TableCell>
+                        <TableCell className="font-mono text-xs">{guestTools.pvsTargetVersion}</TableCell>
                       </TableRow>
                     )}
                   </TableBody>

@@ -3450,7 +3450,21 @@ async function dispatch(request: NextRequest) {
         // whether Remote Desktop is switched on; absent, nobody knows.
         const other = (gm.other as Record<string, string>) || {};
         const rdpEnabled = "data-ts" in other ? other["data-ts"] === "1" : null;
-        return NextResponse.json({ osVersion, ipAddresses, rdpEnabled });
+        // Virtualization & VM Tools, as XenCenter shows them: the agent's version
+        // (major.minor.micro.build) and each driver's, all in PV_drivers_version
+        // ("xennet: XenServer 9.1.8.6"); what else the guest reports in services.
+        const pv = (gm.PV_drivers_version as Record<string, string>) || {};
+        const services = (gm.services as Record<string, string>) || {};
+        const tools = {
+          pvDriversDetected: gm.PV_drivers_detected === true,
+          agentVersion: pv.major !== undefined ? [pv.major, pv.minor, pv.micro, pv.build].filter((x) => x !== undefined && x !== "").join(".") : null,
+          drivers: ["xennet", "xeniface", "xenvif", "xenvbd", "xenbus"]
+            .filter((d) => typeof pv[d] === "string" && pv[d].trim())
+            .map((d) => ({ name: d.charAt(0).toUpperCase() + d.slice(1), version: pv[d].replace(/^XenServer\s+/, "").trim() })),
+          vdaVersion: services["citrix_vda/version"] || null,
+          pvsTargetVersion: services["pvs_target/target_software_version"] || null,
+        };
+        return NextResponse.json({ osVersion, ipAddresses, rdpEnabled, tools });
       }
 
       case "event_register": {
