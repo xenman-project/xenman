@@ -221,7 +221,7 @@ export function RecentTasksTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className={`hidden w-40 sm:table-cell ${head}`}>When</TableHead>
+            <TableHead className={`hidden w-40 sm:table-cell ${head}`}>Date</TableHead>
             {showPool && <TableHead className={`hidden lg:table-cell ${head}`}>Pool</TableHead>}
             <TableHead className={head}>Object</TableHead>
             <TableHead className={`hidden md:table-cell ${head}`}>Operation</TableHead>
