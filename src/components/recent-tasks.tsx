@@ -221,7 +221,7 @@ export function RecentTasksTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className={`hidden w-24 sm:table-cell ${head}`}>When</TableHead>
+            <TableHead className={`hidden w-40 sm:table-cell ${head}`}>When</TableHead>
             {showPool && <TableHead className={`hidden lg:table-cell ${head}`}>Pool</TableHead>}
             <TableHead className={head}>Object</TableHead>
             <TableHead className={`hidden md:table-cell ${head}`}>Operation</TableHead>
@@ -241,8 +241,8 @@ export function RecentTasksTable({
               !!ref && !!conn && ((t.object.class === "VM" && !!conn.vms[ref]) || (t.object.class === "host" && !!conn.hostRecords[ref]));
             return (
               <TableRow key={`${t.hostId}:${t.id}`} className="align-top">
-                <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell" title={dates.dateTime(t.startedAt)}>
-                  {formatAge(t.startedAt)}
+                <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell" title={formatAge(t.startedAt)}>
+                  {dates.dateTime(t.startedAt, { seconds: false })}
                 </TableCell>
                 {showPool && <TableCell className="hidden lg:table-cell">{poolName(t.hostId)}</TableCell>}
                 <TableCell className="max-w-48">
@@ -257,7 +257,7 @@ export function RecentTasksTable({
                   <span className="block text-xs text-muted-foreground md:hidden">{t.operation}</span>
                   {showPool && <span className="block text-xs text-muted-foreground lg:hidden">{poolName(t.hostId)}</span>}
                   <span className="block text-xs text-muted-foreground sm:hidden">
-                    {formatAge(t.startedAt)} · {t.by ?? "Other client"}
+                    {dates.dateTime(t.startedAt, { seconds: false })} · {t.by ?? "Other client"}
                   </span>
                 </TableCell>
                 <TableCell className="hidden md:table-cell">{t.operation}</TableCell>
