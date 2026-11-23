@@ -1,5 +1,7 @@
 # The suites CI runs (tests/run-suites.sh): XenMan against the fake pool,
 # and appliance scripts that need neither root nor systemd.
+# "root" after a name: run as root (systemd-creds, file owners); on a CI runner
+# by sudo.
 busy
 coordinator
 evac-hang
@@ -16,7 +18,7 @@ pool-membership
 pvs
 pwchange
 rrd
-secret
+secret root
 security
 session-handle
 sr-iscsi
