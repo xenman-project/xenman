@@ -137,13 +137,14 @@ export function SnapshotScheduleDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{schedule ? "Edit Snapshot Schedule" : "New Snapshot Schedule"}</DialogTitle>
           <DialogDescription>Snapshots of the selected VMs are taken on a schedule; the oldest are deleted.</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 text-sm">
+        {/* Only this part scrolls: the title and the buttons stay in view. */}
+        <div className="-mr-2 min-h-0 flex-1 space-y-5 overflow-y-auto pr-2 text-sm">
           <section className="grid gap-2 sm:grid-cols-[8rem_1fr] sm:items-center">
             <Label htmlFor="vmss-name">Name</Label>
             <Input id="vmss-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={255} />
@@ -159,7 +160,7 @@ export function SnapshotScheduleDialog({
           <section className="space-y-2">
             <h3 className="font-medium">Virtual Machines</h3>
             <Input placeholder="Filter VMs" value={filter} onChange={(e) => setFilter(e.target.value)} />
-            <div className="max-h-52 space-y-1 overflow-y-auto rounded-md border p-2">
+            <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
               {shownVms.length === 0 && <p className="text-muted-foreground">No VMs.</p>}
               {shownVms.map((v) => {
                 const other = v.schedule && v.schedule !== schedule?.ref ? scheduleName(v.schedule) : null;
