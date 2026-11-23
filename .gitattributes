@@ -4,3 +4,5 @@
 appliance/xenman-* text eol=lf
 *.js text eol=lf
 appliance/rootfs/** text eol=lf
+tests/** text eol=lf
+appliance/node-version text eol=lf
