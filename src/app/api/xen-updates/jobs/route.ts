@@ -92,6 +92,8 @@ export async function POST(request: NextRequest) {
     vgpuShutdown: body.vgpuShutdown === true,
     // Off unless asked for: each such VM goes down briefly.
     noToolsRestart: body.noToolsRestart === true,
+    // A pool of one host only, and only when asked: its running VMs shut down and started again.
+    shutdownVms: body.shutdownVms === true,
     // Off unless chosen: XenServer counts these tasks as optional.
     fullEffectiveness: body.fullEffectiveness === true,
     // On unless switched off: one failing host does not end the whole pool's update.
@@ -112,6 +114,7 @@ export async function POST(request: NextRequest) {
           poolName: p.poolName,
           vgpuVms: p.vgpuVms,
           noToolsVms: p.noToolsVms,
+          singleHostVms: p.singleHostVms ?? [],
           fullTasks: p.fullTasks ?? [],
           // Whether a mail at the end can reach anyone.
           mail: mailStatus(),
@@ -138,7 +141,7 @@ export async function POST(request: NextRequest) {
       action: "xen_update_requested",
       target: target === "pool" ? `pool ${pool.name}` : `host ${result.job!.steps[0]?.hostName ?? target}`,
       outcome: "success",
-      detail: `restarts ${options.automatic ? "automatic" : "by hand"}, VMs away first: ${options.evacuateAlways ? "always" : "when needed"}, VMs back: ${options.moveVmsBack ? "yes" : "no"}, vGPU VMs: ${options.vgpuShutdown ? "shut down" : "migrated"}, full-effectiveness tasks: ${options.automatic && options.fullEffectiveness ? "yes" : "no"}, mail at the end: ${options.mail ? "yes" : "no"}`,
+      detail: `restarts ${options.automatic ? "automatic" : "by hand"}, VMs away first: ${options.evacuateAlways ? "always" : "when needed"}, VMs back: ${options.moveVmsBack ? "yes" : "no"}, vGPU VMs: ${options.vgpuShutdown ? "shut down" : "migrated"}, full-effectiveness tasks: ${options.automatic && options.fullEffectiveness ? "yes" : "no"}, VMs shut down for the update: ${options.shutdownVms ? "yes" : "no"}, mail at the end: ${options.mail ? "yes" : "no"}`,
     });
     return NextResponse.json({ job: result.job });
   } catch (err) {

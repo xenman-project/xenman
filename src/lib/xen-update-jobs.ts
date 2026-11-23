@@ -185,6 +185,11 @@ export interface JobOptions {
    */
   noToolsRestart?: boolean;
   /**
+   * A pool of one host only: its running VMs are shut down before the update
+   * and started on it again afterwards, as there is nowhere to move them.
+   */
+  shutdownVms?: boolean;
+  /**
    * Also do what only full effectiveness asks (XenServer's third level of
    * update tasks, for specific hardware or features), on hosts being updated.
    * Off by default; only with automatic restarts.
@@ -217,7 +222,7 @@ export interface StoppedVm {
    * VM Tools, so moved by a restart. vgpu-failed: its live migration failed,
    * so moved by a restart from then on -- a cold start gives it a clean vGPU.
    */
-  reason?: "vgpu" | "no-tools" | "vgpu-failed";
+  reason?: "vgpu" | "no-tools" | "vgpu-failed" | "single-host";
 }
 
 export interface Job {
@@ -284,6 +289,8 @@ export interface Plan {
   vgpuVms: number;
   /** Running VMs without the VM Tools on hosts this plan empties: they cannot be live-migrated. */
   noToolsVms: number;
+  /** A pool of one host: the VMs running on it, which the shutdownVms option shuts down. */
+  singleHostVms?: string[];
 }
 
 /** The note for a VM without VM Tools that had to be switched off the hard way. */
@@ -473,15 +480,18 @@ function hostNotes(h: HostUpdateState, o: JobOptions): string[] {
 }
 
 /** `vgpus`: running VMs with a vGPU on the host now; `noTools`: running VMs without the VM Tools. */
-function stepsFor(h: HostUpdateState, o: JobOptions, vgpus = 0, noTools = 0): Omit<JobStep, "id" | "state">[] {
+function stepsFor(h: HostUpdateState, o: JobOptions, vgpus = 0, noTools = 0, guests = 0): Omit<JobStep, "id" | "state">[] {
   const n = needs(h, o);
   const s = (kind: JobStep["kind"], label: string) => ({ host: h.ref, hostName: h.name, kind, label });
   const evacuate =
     n.postReboot || (o.automatic && n.preReboot) || n.evacuateGuided || o.evacuateAlways;
-  const shutDown = evacuate && o.vgpuShutdown && vgpus > 0;
+  // A pool of one host (shutdownVms): its running VMs are shut down and started again instead of moved.
+  const allOff = !!o.shutdownVms && guests > 0 && evacuate;
+  const shutDown = !allOff && evacuate && o.vgpuShutdown && vgpus > 0;
   const steps = [s("maintenance", evacuate ? "Enter maintenance mode" : "Disable host")];
+  if (allOff) steps.push(s("vgpu-off", `Shut down ${guests} VM${guests === 1 ? "" : "s"}`));
   if (shutDown) steps.push(s("vgpu-off", vgpuOffLabel(vgpus)));
-  if (evacuate) {
+  if (evacuate && !allOff) {
     steps.push(
       s(
         "evacuate",
@@ -500,6 +510,7 @@ function stepsFor(h: HostUpdateState, o: JobOptions, vgpus = 0, noTools = 0): Om
   const waitsForRestart = !o.automatic && n.postReboot;
   if (!waitsForRestart) steps.push(s("enable", "Exit maintenance mode"));
   if (shutDown && !waitsForRestart) steps.push(s("vgpu-on", VGPU_ON));
+  if (allOff && !waitsForRestart) steps.push(s("vgpu-on", `Start ${guests} VM${guests === 1 ? "" : "s"}`));
   if (steps.some((x) => x.kind === "evacuate") && o.moveVmsBack && !waitsForRestart) steps.push(s("vms-back", "Migrate VMs back"));
   return steps;
 }
@@ -704,6 +715,9 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
   }
   // Running VMs without the VM Tools, per host emptied.
   const noToolsBy = new Map<string, number>();
+  // A pool of one host: the VMs running on it, and how many the option shuts down.
+  const singleHostVms: string[] = [];
+  const guestsBy = new Map<string, number>();
   // VMs shut down rather than moved do not stand in the way of emptying a host.
   const skipFor = (h: HostUpdateState) => new Set(o.vgpuShutdown ? (vgpu.vms.get(h.ref) ?? []).map((x) => x.vm) : []);
   if (evacuating.length) {
@@ -713,10 +727,19 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
       const s = await openPoolSession(hostId);
       try {
         for (const h of evacuating) {
-          const names = (await runningGuests(s, h.ref)).filter((x) => !skipFor(h).has(x.vm)).map((x) => x.name);
-          if (names.length) {
+          const all = await runningGuests(s, h.ref);
+          const names = all.filter((x) => !skipFor(h).has(x.vm)).map((x) => x.name);
+          const list = `${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}`;
+          if (all.length) singleHostVms.push(...all.map((x) => x.name));
+          if (names.length && o.shutdownVms) {
+            // Shut down before the update and started again afterwards (the option asked for).
+            guestsBy.set(h.ref, all.length);
+            warnings.push(
+              `${all.length} VM${all.length === 1 ? "" : "s"} will be shut down before the update and started again afterwards: ${list}. VMs that do not shut down within 10 minutes are forced off.`,
+            );
+          } else if (names.length) {
             blockers.push(
-              `The update requires a host restart, and no other host is available for running VMs. Shut down these VMs first: ${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}.`,
+              `The update requires a host restart, and no other host is available for running VMs. Shut down these VMs first: ${list}.`,
             );
           }
         }
@@ -809,6 +832,7 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
     warnings,
     vgpuVms,
     noToolsVms: [...noToolsBy.values()].reduce((a, b) => a + b, 0),
+    singleHostVms,
     fullTasks: hosts
       .map((h) => ({ host: h.name, tasks: fullTasksOf(h, o).map((g) => TASK_TEXT[g]) }))
       .filter((x) => x.tasks.length > 0),
@@ -820,7 +844,7 @@ export async function planJob(hostId: string, target: "pool" | string, o: JobOpt
         name: h.name,
         isCoordinator: h.isCoordinator,
         updates: h.updates.length,
-        steps: stepsFor(h, o, vgpusOn(h), noToolsBy.get(h.ref) ?? 0),
+        steps: stepsFor(h, o, vgpusOn(h), noToolsBy.get(h.ref) ?? 0, guestsBy.get(h.ref) ?? 0),
         notes: hostNotes(h, o),
       })),
     ),
@@ -1286,11 +1310,14 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
    * of XenMan still knows which VMs to start again.
    */
   const vgpuOff = async (step: JobStep, h: string) => {
-    const vms = (await vgpuFacts(await c.get())).vms.get(h) ?? [];
+    // A pool of one host (shutdownVms): every running VM; otherwise those with a vGPU.
+    const vms = job.options.shutdownVms ? await runningGuests(await c.get(), h) : ((await vgpuFacts(await c.get())).vms.get(h) ?? []);
     const known = new Set((job.vgpuStopped ?? []).filter((x) => !x.started).map((x) => x.vm));
     job.vgpuStopped = [
       ...(job.vgpuStopped ?? []),
-      ...vms.filter((x) => !known.has(x.vm)).map((x) => ({ ...x, host: h, hostName: step.hostName })),
+      ...vms
+        .filter((x) => !known.has(x.vm))
+        .map((x) => ({ ...x, host: h, hostName: step.hostName, ...(job.options.shutdownVms ? { reason: "single-host" as const } : {}) })),
     ];
     save(job);
     const forced: string[] = [];
@@ -1743,9 +1770,9 @@ async function run(job: Job, onEvent: (action: string, outcome: "success" | "fai
             if (rec && !rec.is_control_domain) guests++;
             if (rec && !rec.is_control_domain && rec.power_state === "Running") running.push(vm);
           }
-          // Nothing on it to move: no evacuation asked of XenServer -- which, on
-          // a pool of one host, would have nowhere to send anything (issue #8).
-          if (guests === 0) {
+          // A pool of one host with nothing on it: no evacuation asked of
+          // XenServer, which would have nowhere to send anything (issue #8).
+          if (guests === 0 && (await c.call<string[]>("host.get_all").catch(() => [] as string[])).length === 1) {
             end(step, "done", "no running VMs");
             continue steps;
           }

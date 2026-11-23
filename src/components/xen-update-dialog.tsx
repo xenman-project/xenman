@@ -34,6 +34,8 @@ interface Plan {
   vgpuVms?: number;
   /** Running VMs without the VM Tools there: they cannot be live-migrated. */
   noToolsVms?: number;
+  /** A pool of one host: the VMs running on it. */
+  singleHostVms?: string[];
   /** Tasks only full effectiveness asks, per host. */
   fullTasks?: { host: string; tasks: string[] }[];
   /** Whether a mail at the end can reach anyone. */
@@ -66,6 +68,8 @@ export function XenUpdateDialog({
   const [noToolsRestart, setNoToolsRestart] = useState(false);
   // Off unless chosen: XenServer counts these tasks as optional.
   const [fullEffectiveness, setFullEffectiveness] = useState(false);
+  // Off unless chosen: on a pool of one host, its VMs go down for the update.
+  const [shutdownVms, setShutdownVms] = useState(false);
   const [skipFailingHosts, setSkipFailingHosts] = useState(true);
   const [mail, setMail] = useState(true);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -88,11 +92,12 @@ export function XenUpdateDialog({
           vgpuShutdown,
           noToolsRestart,
           fullEffectiveness,
+          shutdownVms,
           dryRun,
           ...extra,
         }),
       }),
-    [hostId, target, automatic, moveVmsBack, evacuateAlways, vgpuShutdown, noToolsRestart, fullEffectiveness],
+    [hostId, target, automatic, moveVmsBack, evacuateAlways, vgpuShutdown, noToolsRestart, fullEffectiveness, shutdownVms],
   );
 
   useEffect(() => {
@@ -194,6 +199,19 @@ export function XenUpdateDialog({
                   Shut down VMs with vGPUs instead of migrating them
                   <span className="block text-xs font-normal text-muted-foreground">
                     If disabled, VMs with vGPUs are live-migrated. A VM whose migration fails is restarted on another host.
+                  </span>
+                </Label>
+              </div>
+            )}
+            {/* A pool of one host with VMs running: nowhere to move them -- shut down, started again after. */}
+            {(plan?.singleHostVms?.length ?? 0) > 0 && (
+              <div className="flex items-start gap-2">
+                <Switch id="xu-vmsoff" checked={shutdownVms} onCheckedChange={setShutdownVms} />
+                <Label htmlFor="xu-vmsoff" className="block leading-snug">
+                  Shut down running VMs and start them again after the update
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    {plan!.singleHostVms!.length} VM{plan!.singleHostVms!.length === 1 ? "" : "s"}: {plan!.singleHostVms!.slice(0, 6).join(", ")}
+                    {plan!.singleHostVms!.length > 6 ? ", …" : ""}. VMs that do not shut down within 10 minutes are forced off.
                   </span>
                 </Label>
               </div>

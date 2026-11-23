@@ -78,6 +78,7 @@ import { MemoryTab } from "@/components/memory/memory-tab";
 import { AddServerDialog } from "@/components/pool/add-server-dialog";
 import { CalendarClock, HardDriveDownload, ServerCog } from "lucide-react";
 import { SnapshotSchedulesTab } from "@/components/pool/snapshot-schedules-tab";
+import { VmTable } from "@/components/vm/vm-table";
 import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { WlbTab } from "@/components/wlb-tab";
 import { PvsTab } from "@/components/pvs/pvs-tab";
@@ -1234,67 +1235,7 @@ export function HostDetail() {
                     No VMs found
                   </p>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>vCPUs</TableHead>
-                        <TableHead>Memory</TableHead>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Host</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {vms
-                        .sort((a, b) => {
-                          const order = {
-                            Running: 0,
-                            Paused: 1,
-                            Suspended: 2,
-                            Halted: 3,
-                          };
-                          return (
-                            order[a.powerState] - order[b.powerState] ||
-                            a.nameLabel.localeCompare(b.nameLabel)
-                          );
-                        })
-                        .map((vm) => {
-                          const hostRecord = conn.hostRecords[vm.residentOn];
-                          return (
-                            <TableRow
-                              key={vm.ref}
-                              className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                              onClick={() => selectVm(vm.ref)}
-                            >
-                              <TableCell className="font-medium">
-                                {vm.nameLabel}
-                              </TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant="outline"
-                                  className={`${powerStateBadge[vm.powerState]} gap-1`}
-                                >
-                                  {powerStateIcon[vm.powerState]}
-                                  {vm.powerState}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>{vm.vcpusMax}</TableCell>
-                              <TableCell>
-                                {formatBytes(vm.memoryStaticMax)}
-                              </TableCell>
-                              <TableCell className="text-xs uppercase">
-                                {vm.domainType || "N/A"}
-                              </TableCell>
-                              <TableCell className="text-zinc-500">
-                                {hostRecord?.nameLabel ||
-                                  (vm.powerState === "Halted" ? "-" : "Unknown")}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                    </TableBody>
-                  </Table>
+                  <VmTable hostId={hostId} conn={conn} vms={vms} canAct={canAct} showHost />
                 )}
               </CardContent>
             </Card>

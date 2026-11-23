@@ -73,6 +73,7 @@ import { PerfCharts } from "@/components/perf-charts";
 import { VmPowerState, XenVM } from "@/lib/types";
 import { CreateVmDialog } from "@/components/create-vm-dialog";
 import { RecentTasks } from "@/components/recent-tasks";
+import { VmTable } from "@/components/vm/vm-table";
 
 function formatUptime(unixTimestamp: number): string {
   const now = Date.now() / 1000;
@@ -889,69 +890,7 @@ export function XenHostDetail() {
                     No VMs on this host
                   </p>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>vCPUs</TableHead>
-                        <TableHead>Memory</TableHead>
-                        <TableHead>Type</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {[...runningVms, ...nonRunningVms]
-                        .sort((a, b) => {
-                          const order = {
-                            Running: 0,
-                            Paused: 1,
-                            Suspended: 2,
-                            Halted: 3,
-                          };
-                          return (
-                            order[a.powerState] - order[b.powerState] ||
-                            a.nameLabel.localeCompare(b.nameLabel)
-                          );
-                        })
-                        .map((vm) => {
-                          const seg = vmSegments.find((s) => s.vm.ref === vm.ref);
-                          return (
-                            <TableRow
-                              key={vm.ref}
-                              className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                              onClick={() => selectVm(vm.ref)}
-                            >
-                              <TableCell>
-                                <div className="flex items-center gap-2 font-medium">
-                                  {seg && (
-                                    <div
-                                      className={`h-2.5 w-2.5 rounded-sm shrink-0 ${seg.color}`}
-                                    />
-                                  )}
-                                  {vm.nameLabel}
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant="outline"
-                                  className={`${powerStateBadge[vm.powerState]} gap-1`}
-                                >
-                                  {powerStateIcon[vm.powerState]}
-                                  {vm.powerState}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>{vm.vcpusMax}</TableCell>
-                              <TableCell>
-                                {formatBytes(vm.memoryStaticMax)}
-                              </TableCell>
-                              <TableCell className="text-xs uppercase">
-                                {vm.domainType || "N/A"}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                    </TableBody>
-                  </Table>
+                  <VmTable hostId={hostId} conn={conn} vms={residentVms} canAct={canAct} />
                 )}
               </CardContent>
             </Card>
