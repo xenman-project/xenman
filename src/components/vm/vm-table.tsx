@@ -246,7 +246,7 @@ export function VmTable({
           {confirm === "shutdown" && (
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-              Force shut down (like pulling the plug)
+              Force shut down
             </label>
           )}
           <AlertDialogFooter>
