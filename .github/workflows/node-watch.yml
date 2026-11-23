@@ -1,0 +1,164 @@
+# Every Monday: has Node.js put out a security release of the line the
+# appliance ships (appliance/node-version) that XenMan's last release lacks?
+# Then, without anyone's help (.github/node-watch.sh):
+#
+#   1. a branch node-<version> with node-version raised (release and digest
+#      from nodejs.org's SHASUMS256.txt) and a CHANGELOG entry;
+#   2. the tests (test.yml) on it;
+#   3. green: after a final release the next patch release is tagged -- the
+#      Release workflow builds it and waits for a maintainer's approval as
+#      always -- and a pull request brings the change to main; during a
+#      release candidate series only the pull request (the fix ships with the
+#      next candidate). An issue says what happened, red or green.
+#
+# Tagging needs the secret RELEASE_TAG_TOKEN: a fine-grained token for this
+# repository with "Contents: read and write" -- a tag pushed with the
+# workflow's own token would not start the Release workflow. Without it the
+# issue asks for the tag to be pushed by hand. The pull request is opened with
+# the workflow's own token: Settings > Actions > General must allow GitHub
+# Actions to create pull requests.
+#
+# "Run workflow" by hand: dry run by default -- branch, tests, pull request and
+# issue are made (marked as a dry run), the tag only shown. "pretend_pinned"
+# acts as if node-version held an older release, to see the whole way.
+
+name: Node.js watch
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      pretend_pinned:
+        description: Act as if node-version held this release (e.g. 24.20.0)
+        type: string
+        default: ""
+      dry_run:
+        description: Dry run (no tag)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-watch
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check and prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      base: ${{ steps.plan.outputs.base }}
+      pinned: ${{ steps.plan.outputs.pinned }}
+      newest: ${{ steps.plan.outputs.newest }}
+      security: ${{ steps.plan.outputs.security }}
+      version: ${{ steps.plan.outputs.version }}
+      branch: ${{ steps.plan.outputs.branch }}
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      PRETEND_PINNED: ${{ inputs.pretend_pinned }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - id: plan
+        run: bash .github/node-watch.sh plan
+      - name: Prepare the branch
+        if: steps.plan.outputs.mode != 'none'
+        env:
+          MODE: ${{ steps.plan.outputs.mode }}
+          BASE: ${{ steps.plan.outputs.base }}
+          NEWEST: ${{ steps.plan.outputs.newest }}
+          SECURITY: ${{ steps.plan.outputs.security }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          BRANCH: ${{ steps.plan.outputs.branch }}
+        # A copy: the checkout moves to the base, which may hold another script.
+        run: |
+          cp .github/node-watch.sh "$RUNNER_TEMP/node-watch.sh"
+          bash "$RUNNER_TEMP/node-watch.sh" prepare
+
+  tests:
+    name: Tests
+    needs: prepare
+    if: needs.prepare.outputs.mode != 'none'
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.prepare.outputs.branch }}
+    permissions:
+      contents: read
+
+  finish:
+    name: Tag, pull request, issue
+    needs: [prepare, tests]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.mode != 'none'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HAS_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN != '' }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      GREEN: ${{ needs.tests.result == 'success' }}
+      MODE: ${{ needs.prepare.outputs.mode }}
+      PINNED: ${{ needs.prepare.outputs.pinned }}
+      NEWEST: ${{ needs.prepare.outputs.newest }}
+      SECURITY: ${{ needs.prepare.outputs.security }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      BRANCH: ${{ needs.prepare.outputs.branch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+          token: ${{ secrets.RELEASE_TAG_TOKEN || github.token }}
+      - name: Tag, pull request, issue
+        run: |
+          set -euo pipefail
+          mark=""; [ "$DRY_RUN" = true ] && mark="[dry run] "
+          tagged=""
+          if [ "$GREEN" = true ] && [ "$MODE" = release ]; then
+            if [ "$DRY_RUN" = true ]; then
+              tagged="Dry run: v$VERSION would have been tagged on $BRANCH ($(git rev-parse --short HEAD))."
+            elif [ "$HAS_TAG_TOKEN" = true ]; then
+              git -c user.name="XenMan authors" -c user.email="authors@xenman.invalid" tag -a "v$VERSION" -m "XenMan $VERSION"
+              git push origin "v$VERSION"
+              tagged="Tagged **v$VERSION**: the Release workflow builds it and waits for approval -- $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/release.yml"
+            else
+              tagged="Not tagged: the secret RELEASE_TAG_TOKEN is missing. Tag by hand: \`git tag -a v$VERSION -m \"XenMan $VERSION\" origin/$BRANCH && git push origin v$VERSION\`"
+            fi
+          fi
+          pr=""
+          if [ "$GREEN" = true ]; then
+            pr=$(gh pr create --base main --head "$BRANCH" \
+              --title "${mark}Node.js $NEWEST (security releases $SECURITY)" \
+              --body "Raises appliance/node-version from $PINNED to $NEWEST for the security releases $SECURITY.${VERSION:+ Released as v$VERSION.}
+
+          Tests: $RUN_URL" 2>&1) || pr="Pull request not opened: $pr"
+          fi
+          if [ "$GREEN" = true ]; then
+            title="${mark}Node.js $NEWEST: security releases ready${VERSION:+ in v$VERSION}"
+            state="The tests passed on \`$BRANCH\`."
+          else
+            title="${mark}Node.js $NEWEST: security releases -- tests failed"
+            state="The tests failed on \`$BRANCH\`: nothing tagged. See the run's suite logs."
+          fi
+          body="Node.js $PINNED misses the security releases $SECURITY; $NEWEST carries them (https://nodejs.org/en/blog/vulnerability).
+
+          $state
+          ${tagged}
+          ${pr:+Pull request: $pr}
+
+          Run: $RUN_URL"
+          gh issue create --title "$title" --body "$body"
+          { echo "$title"; echo; echo "$tagged"; echo "${pr:+Pull request: $pr}"; } >> "$GITHUB_STEP_SUMMARY"

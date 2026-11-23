@@ -29,37 +29,5 @@ if [ -z "${INDEX}" ]; then
   fi
 fi
 
-"${NODE_BIN}" - "${INDEX}" "${NODE_VERSION}" <<'JS' || echo "  Node.js ${NODE_VERSION}: could not read the release list"
-const fs = require("fs");
-const [file, pinned] = process.argv.slice(2);
-const parse = (v) => v.replace(/^v/, "").split(".").map(Number);
-const newer = (a, b) => {
-  const [x, y] = [parse(a), parse(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
-  return false;
-};
-const list = JSON.parse(fs.readFileSync(file, "utf8"));
-const major = parse(pinned)[0];
-const ahead = list.filter((r) => parse(r.version)[0] === major && newer(r.version, pinned));
-if (!ahead.length) {
-  console.log(`  Node.js ${pinned}: the newest ${major}.x`);
-} else {
-  const newest = ahead.reduce((a, b) => (newer(b.version, a.version) ? b : a));
-  const security = ahead.filter((r) => r.security).map((r) => r.version);
-  if (security.length) {
-    console.log("");
-    console.log(`  !! Node.js ${newest.version.slice(1)} is out, and ${pinned} misses security releases: ${security.join(", ")}`);
-    console.log("  !! Raise appliance/node-version: the release, and the tarball's line from its SHASUMS256.txt.");
-    console.log("");
-  } else {
-    console.log(`  Node.js ${newest.version.slice(1)} is out (no security fixes over ${pinned})`);
-  }
-}
-const lts = list
-  .filter((r) => r.lts && parse(r.version)[0] > major)
-  .map((r) => parse(r.version)[0]);
-if (lts.length) {
-  console.log(`  Node.js ${Math.max(...lts)} is an LTS line too -- moving to it is a decision of its own`);
-}
-JS
+"${NODE_BIN}" "${HERE}/node-newer.js" --text "${INDEX}" "${NODE_VERSION}" || echo "  Node.js ${NODE_VERSION}: could not read the release list"
 exit 0

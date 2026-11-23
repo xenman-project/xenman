@@ -14,6 +14,7 @@ appliance/
 ├── node-version         the Node.js release both builds ship, with its pinned digest
 ├── fetch-node.sh        gets that tarball and checks it against the digest
 ├── check-node.sh        warns when node-version is behind its line, loudly for security releases
+├── node-newer.js        the comparison behind it, also as JSON (weekly node-watch workflow)
 ├── rootfs/              units and apt policy, laid out as on the appliance
 ├── xenman-updater       installs update packages on the appliance (root)
 ├── xenman-os-update     installs Debian security updates and logs them (root)
