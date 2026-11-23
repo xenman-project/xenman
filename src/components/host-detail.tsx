@@ -76,7 +76,8 @@ import {
 import { GpuTab } from "@/components/gpu/gpu-tab";
 import { MemoryTab } from "@/components/memory/memory-tab";
 import { AddServerDialog } from "@/components/pool/add-server-dialog";
-import { HardDriveDownload, ServerCog } from "lucide-react";
+import { CalendarClock, HardDriveDownload, ServerCog } from "lucide-react";
+import { SnapshotSchedulesTab } from "@/components/pool/snapshot-schedules-tab";
 import { XenUpdatesTab } from "@/components/xen-updates-tab";
 import { WlbTab } from "@/components/wlb-tab";
 import { PvsTab } from "@/components/pvs/pvs-tab";
@@ -832,6 +833,10 @@ export function HostDetail() {
               <PackageCheck className="h-4 w-4" />
               Updates
             </TabsTrigger>
+            <TabsTrigger value="schedules" className="gap-2">
+              <CalendarClock className="h-4 w-4" />
+              Snapshot Schedules
+            </TabsTrigger>
             <TabsTrigger value="wlb" className="gap-2">
               <Scale className="h-4 w-4" />
               WLB
@@ -1313,6 +1318,9 @@ export function HostDetail() {
             <GpuTab key={hostId} conn={conn} hostRef={null} isAdmin={isAdmin} />
           </TabsContent>
 
+          <TabsContent value="schedules">
+            <SnapshotSchedulesTab key={hostId} conn={conn} poolName={pool?.nameLabel ?? ""} canAct={canAct} />
+          </TabsContent>
           <TabsContent value="wlb">
             <WlbTab key={hostId} conn={conn} poolName={pool?.nameLabel ?? ""} isAdmin={isAdmin} />
           </TabsContent>

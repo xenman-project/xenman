@@ -142,6 +142,7 @@ import {
   type IscsiLunConfig, type IscsiTarget,
 } from "@/lib/sr-iscsi";
 import { checkCoordinatorChange, coordinatorOptions, getMaintenanceJob, runningFor, runningInPool, sessionCall, startDesignate, startMaintenance } from "@/lib/host-maintenance-job";
+import { deleteVmss, parseVmssInput, runVmssNow, saveVmss, setVmSchedule, setVmssEnabled, vmssOverview, VmssRefused } from "@/lib/xen-vmss";
 import { getDom0MemoryJob, runningDom0Job, startDom0MemoryChange } from "@/lib/dom0-memory-job";
 import { checkJoin, getMemberJob, runningMemberJob, startAddServer, startRemoveServer, type MemberContext } from "@/lib/pool-membership-job";
 import { NotConfirmedError } from "@/lib/xen-tls";
@@ -833,7 +834,7 @@ const READ_ONLY_ACTIONS = new Set([
   "pool_networks", "task_status", "tasks_list", "network_job_status", "gpu_overview", "memory_overview", "vm_memory_job_status", "host_dom0_job_status", "pool_member_job_status", "license_overview",
   "vm_export_status", "vm_snapshots", "vm_guest_metrics", "pool_wlb_status", "host_networking",
   "vm_copy_check", "vm_snapshot_to_template_check", "vm_import_targets", "vm_gpu", "sr_states", "host_maintenance_job_status", "pool_coordinator_options",
-  "pvs_overview", "pvs_vm_status",
+  "pvs_overview", "pvs_vm_status", "vmss_overview",
   "event_register", "event_poll", "event_poll_multi", "alerts_fetch", "rrd", "rrd_sources",
 ]);
 
@@ -2601,6 +2602,60 @@ async function dispatch(request: NextRequest) {
         return NextResponse.json({ taskRef: provisionTaskRef, vmRef: newVmRef, startAfter: !!startAfter });
       }
 
+      // VM snapshot schedules (lib/xen-vmss.ts), as XenCenter's VM Snapshot
+      // Schedules: administrators and operators change them, everyone with the pool sees them.
+      case "vmss_overview":
+      case "vmss_save":
+      case "vmss_delete":
+      case "vmss_set_enabled":
+      case "vmss_run_now":
+      case "vm_set_snapshot_schedule": {
+        const poolId = lookupSession(sessionRef)?.hostId ?? "";
+        const call = sessionCall({ poolId, address: host, port, useSsl, sessionRef, actor: auth.sub, role: auth.role, ip: clientIp(request) });
+        const vmssRef = isXenRef(body.vmssRef) ? body.vmssRef : null;
+        try {
+          switch (action) {
+            case "vmss_overview":
+              return NextResponse.json(await vmssOverview(call));
+            case "vmss_save": {
+              if (body.vmssRef !== undefined && body.vmssRef !== null && !vmssRef) {
+                return NextResponse.json({ error: "No such schedule" }, { status: 400 });
+              }
+              const input = parseVmssInput(body.schedule);
+              const r = await saveVmss(call, vmssRef, input);
+              return NextResponse.json({
+                vmssRef: r.ref,
+                ...(r.taskRef ? { taskRef: r.taskRef } : {}),
+                auditNote: `schedule "${input.name}": ${input.frequency}, keeps ${input.retained}, ${input.vms.length} VM${input.vms.length === 1 ? "" : "s"}${input.runNow ? ", first snapshot now" : ""}`,
+              });
+            }
+            case "vmss_delete": {
+              if (!vmssRef) return NextResponse.json({ error: "No schedule given" }, { status: 400 });
+              const r = await deleteVmss(call, vmssRef);
+              return NextResponse.json({ success: true, auditNote: `schedule "${r.name}" deleted, ${r.vms} VM${r.vms === 1 ? "" : "s"} taken out of it` });
+            }
+            case "vmss_set_enabled": {
+              if (!vmssRef || typeof body.enabled !== "boolean") return NextResponse.json({ error: "No schedule given" }, { status: 400 });
+              const name = await setVmssEnabled(call, vmssRef, body.enabled);
+              return NextResponse.json({ success: true, auditNote: `schedule "${name}" ${body.enabled ? "enabled" : "disabled"}` });
+            }
+            case "vmss_run_now": {
+              if (!vmssRef) return NextResponse.json({ error: "No schedule given" }, { status: 400 });
+              const r = await runVmssNow(call, vmssRef);
+              return NextResponse.json({ taskRef: r.taskRef, auditNote: `schedule "${r.name}" run now` });
+            }
+            default: {
+              if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
+              const name = await setVmSchedule(call, vmRef, vmssRef);
+              return NextResponse.json({ success: true, auditNote: name !== null ? `into snapshot schedule "${name}"` : "out of its snapshot schedule" });
+            }
+          }
+        } catch (err) {
+          if (err instanceof VmssRefused) return NextResponse.json({ error: err.message }, { status: err.status });
+          throw err;
+        }
+      }
+
       case "tasks_list": {
         // Recent Tasks of the session's pool (lib/recent-tasks.ts); a host's are filtered in the browser.
         const poolId = lookupSession(sessionRef)?.hostId ?? "";
@@ -3993,6 +4048,11 @@ const TRACKED_ACTIONS: Record<string, { operation: (f: Fields) => string; object
   sr_create: { operation: () => "Create SR", object: (f) => ({ class: "SR", name: str(f.nameLabel) ?? str(f.name) }) },
   sr_iscsi_create: { operation: () => "Create SR", object: (f) => ({ class: "SR", name: str(f.nameLabel) ?? str(f.name) }) },
   sr_scan: { operation: () => "Rescan", object: srObj },
+  vmss_save: { operation: (f) => (str(f.vmssRef) ? "Change snapshot schedule" : "Create snapshot schedule"), object: (f) => ({ class: "pool", name: str((f.schedule as Record<string, unknown> | undefined)?.name) }) },
+  vmss_delete: { operation: () => "Delete snapshot schedule", object: (f) => ({ class: "pool", name: str(f.vmssName) }) },
+  vmss_set_enabled: { operation: (f) => (f.enabled === true ? "Enable snapshot schedule" : "Disable snapshot schedule"), object: (f) => ({ class: "pool", name: str(f.vmssName) }) },
+  vmss_run_now: { operation: () => "Run snapshot schedule", object: (f) => ({ class: "pool", name: str(f.vmssName) }) },
+  vm_set_snapshot_schedule: { operation: () => "Change snapshot schedule", object: (f) => vmObj(f) },
 };
 
 /** Listed from the start, so a long action shows as running while it runs. */
@@ -4090,7 +4150,7 @@ export async function POST(request: NextRequest) {
 
   // What a new iSCSI SR became (formatted or reattached) only the action knows; it says so in its answer.
   let note: string | undefined;
-  if (outcome === "success" && action === "sr_iscsi_create") {
+  if (outcome === "success" && (action === "sr_iscsi_create" || action.startsWith("vmss_") || action === "vm_set_snapshot_schedule")) {
     try {
       const answer = (await response.clone().json()) as { auditNote?: unknown };
       if (typeof answer.auditNote === "string") note = answer.auditNote;

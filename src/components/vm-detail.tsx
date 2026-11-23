@@ -78,6 +78,7 @@ import { VmSettingsDialog } from "@/components/vm-settings-dialog";
 import { MemoryTab } from "@/components/memory/memory-tab";
 import { ConvertToTemplateDialog, CopyVmDialog, SnapshotTemplateDialog } from "@/components/vm/copy-vm-dialog";
 import { VmGpuTab } from "@/components/vm/vm-gpu-tab";
+import { VmSnapshotSchedule } from "@/components/pool/snapshot-schedules-tab";
 import { useDates } from "@/context/date-format-context";
 
 function formatBytes(bytes: number): string {
@@ -1383,6 +1384,9 @@ function VmDetailView({ hostId, vmRef }: { hostId: string; vmRef: string }) {
                 )}
               </CardContent>
             </Card>
+            <div className="mt-4">
+              <VmSnapshotSchedule conn={conn} vmRef={vmRef} canAct={canAct} />
+            </div>
           </TabsContent>
 
           {/* Mounted only while open: it polls the host while shown. */}
