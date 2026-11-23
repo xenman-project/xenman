@@ -6,6 +6,9 @@ section of the version it leads to.
 
 ## [1.0.5] - Unreleased
 
+### Security
+- **Node.js 24.22.3.** The Node.js the appliance runs goes from 24.22.3 to 24.22.3, for the security releases v24.22.3, v24.22.1 (see https://nodejs.org/en/blog/vulnerability). The update package replaces it on the appliance.
+
 ### Added
 - **Sign in with Microsoft Entra ID.** Under Settings > Security an administrator enters the app registration (tenant ID, client ID, client secret) and XenMan's address; the sign-in page then offers **Sign in with Microsoft**. The role comes from the app roles `XenMan.Admin`, `XenMan.Operator` and `XenMan.Viewer` at every sign-in; someone without one does not get in. XenMan creates the account at the first sign-in; pool access is still given in XenMan. MFA is left to Entra ID, so XenMan's two-factor code is not asked of these accounts. Password sign-in can be left to administrators only, as the way in when Entra ID is down. XenMan checks the ID token itself (signature against the tenant's keys, issuer, audience, tenant, nonce, PKCE), with no new dependency. The client secret is stored encrypted. See the README for setting up the app registration.
 - **Updates: tasks for full effectiveness and live patches.** XenServer sorts the tasks after an update into mandatory, recommended and full effectiveness; the last are needed only for specific hardware or features. XenMan showed none of these, so a host restart XenCenter lists under "Update tasks for full effectiveness" did not appear. The Updates tab now shows them per host and per update ("Full effectiveness: Restart host"), the components with live patches ("Live patch: Xen, Kernel") and tasks still pending from an earlier update, recommended and full effectiveness included. The Install Updates dialog offers **Also perform tasks for full effectiveness** (off by default, with automatic restarts only) and says per host what is not performed.
