@@ -227,7 +227,7 @@ export function RecentTasksTable({
             <TableHead className={`hidden md:table-cell ${head}`}>Operation</TableHead>
             <TableHead className={head}>Status</TableHead>
             <TableHead className={`hidden sm:table-cell ${head}`}>By</TableHead>
-            <TableHead className={`w-20 ${head}`} />
+            <TableHead className={`w-20 text-right ${head}`}>Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
