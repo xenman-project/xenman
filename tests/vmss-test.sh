@@ -42,7 +42,7 @@ code -b $CO -X POST $B/api/xen $J -d '{"action":"connect","hostId":"pool1"}' >/d
 code -b $CV -X POST $B/api/xen $J -d '{"action":"connect","hostId":"pool1"}' >/dev/null; SV=$(field d.sessionRef < $BODY)
 x() { code ${3:-$A} -X POST $B/api/xen $J -d "{\"action\":\"$1\",\"sessionRef\":\"${4:-$S}\"${2:+,$2}}"; }
 L="$FX/calls.log"
-writes() { grep -E '^(VMSS\.(create|destroy|set_[a-z_]+)|Async\.VMSS\.snapshot_now|VM\.set_snapshot_schedule) ' "$L" | sed -E 's/ \[.*//' | paste -sd' '; }
+writes() { grep -E '^(VMSS\.(create|destroy|set_[a-z_]+|snapshot_now)|VM\.set_snapshot_schedule) ' "$L" | sed -E 's/ \[.*//' | paste -sd' '; }
 overview() { x vmss_overview >/dev/null; }
 sched() { field "const s=d.schedules.find(s=>s.name===\"$1\"); s?($2):\"none\"" < $BODY; }
 VM1=OpaqueRef:vm-1; VM2=OpaqueRef:vm-2; VM3=OpaqueRef:vm-3
@@ -60,8 +60,12 @@ echo "=== creating, as XenCenter's CreateVMPolicy ==="
 : > "$L"
 x vmss_save "\"schedule\":{\"name\":\"Daily backup\",\"description\":\"web\",\"enabled\":true,\"type\":\"snapshot\",\"retained\":7,\"frequency\":\"daily\",\"min\":0,\"hour\":2,\"days\":[],\"vms\":[\"$VM1\",\"$VM3\"],\"runNow\":true}" >/dev/null
 NEW=$(field d.vmssRef < $BODY)
-check "created, its first run a task" "true true" "$(field '(d.vmssRef||"").startsWith("OpaqueRef:")+" "+(d.taskRef||"").startsWith("OpaqueRef:")' < $BODY)"
-check "  create, the two VMs, then the run" "VMSS.create VM.set_snapshot_schedule VM.set_snapshot_schedule Async.VMSS.snapshot_now" "$(writes)"
+check "created, its first run started in the background" "true true" "$(field '(d.vmssRef||"").startsWith("OpaqueRef:")+" "+(typeof d.backgroundId==="string"&&!d.taskRef)' < $BODY)"
+sleep 0.3
+check "  create, the two VMs, then the run -- synchronous, as XenServer has no Async.VMSS.snapshot_now" "VMSS.create VM.set_snapshot_schedule VM.set_snapshot_schedule VMSS.snapshot_now" "$(writes)"
+check "  in Recent Tasks: running while XenServer takes the snapshots" true "$(x tasks_list >/dev/null; field 'd.tasks.some(t=>t.operation==="Create snapshot schedule"&&t.state==="running")' < $BODY)"
+sleep 2
+check "  then done" true "$(x tasks_list >/dev/null; field 'd.tasks.some(t=>t.operation==="Create snapshot schedule"&&t.state==="done")' < $BODY)"
 check "  the schedule map as XenCenter writes it" '{"hour":"2","min":"0"}' "$(grep '^VMSS.create ' "$L" | sed -E 's/^VMSS.create //' | "$NODE" -pe 'JSON.stringify(JSON.parse(require("fs").readFileSync(0))[0].schedule)')"
 check "  retained as XAPI's int" '"7"' "$(grep '^VMSS.create ' "$L" | sed -E 's/^VMSS.create //' | "$NODE" -pe 'JSON.stringify(JSON.parse(require("fs").readFileSync(0))[0].retained_snapshots)')"
 overview
@@ -93,7 +97,15 @@ check "quiesced, newly chosen" 400 "$(x vmss_save '"schedule":{"name":"q","type"
 echo "=== enabling, running, one VM ==="
 : > "$L"
 check "disabled" "200 VMSS.set_enabled" "$(x vmss_set_enabled "\"vmssRef\":\"$NEW\",\"vmssName\":\"Daily backup\",\"enabled\":false") $(writes)"
-check "run now: a task, followed in Recent Tasks" "true true" "$(x vmss_run_now "\"vmssRef\":\"$NEW\",\"vmssName\":\"Daily backup\"" >/dev/null; field '(d.taskRef||"").startsWith("OpaqueRef:")' < $BODY) $(x tasks_list >/dev/null; field 'd.tasks.some(t=>t.operation==="Run snapshot schedule"&&t.state==="running")' < $BODY)"
+check "run now: started in the background, followed in Recent Tasks" "true true" "$(x vmss_run_now "\"vmssRef\":\"$NEW\",\"vmssName\":\"Daily backup\"" >/dev/null; field 'typeof d.backgroundId==="string"' < $BODY) $(x tasks_list >/dev/null; field 'd.tasks.some(t=>t.operation==="Run snapshot schedule"&&t.state==="running")' < $BODY)"
+sleep 2
+check "  done once XenServer answered" true "$(x tasks_list >/dev/null; field 'd.tasks.filter(t=>t.operation==="Run snapshot schedule").every(t=>t.state==="done")' < $BODY)"
+touch "$FX/vmss-snapshot-fails"
+x vmss_run_now "\"vmssRef\":\"$NEW\",\"vmssName\":\"Daily backup\"" >/dev/null; sleep 2
+check "  a run that fails: failed, with XenServer's words" true "$(x tasks_list >/dev/null; field 'd.tasks.some(t=>t.operation==="Run snapshot schedule"&&t.state==="failed"&&/SR_FULL/.test(t.error))' < $BODY)"
+rm -f "$FX/vmss-snapshot-fails"
+check "  never the Async form, which XenServer does not have" 0 "$(grep -c '^Async.VMSS.snapshot_now' "$L")"
+check "an error of XenServer: its code and details, not a bare word" "502 HANDLE_INVALID VMSS OpaqueRef:vmss-gone" "$(x vmss_set_enabled '"vmssRef":"OpaqueRef:vmss-gone","enabled":true') $(field d.error < $BODY)"
 check "run now with no VMs: refused" 409 "$(x vmss_run_now '"vmssRef":"OpaqueRef:vmss-nightly"')"
 : > "$L"
 check "web-01 into Nightly from its VM" "200 VM.set_snapshot_schedule" "$(x vm_set_snapshot_schedule "\"vmRef\":\"$VM1\",\"vmssRef\":\"OpaqueRef:vmss-nightly\"") $(writes)"

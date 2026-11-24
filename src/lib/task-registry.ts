@@ -62,10 +62,12 @@ const g = globalThis as typeof globalThis & {
   _xenmanTracked?: Map<string, TrackedAction[]>;
   _xenmanSeenTasks?: Map<string, Map<string, SeenTask>>;
   _xenmanInternalTasks?: Map<string, number>;
+  _xenmanBackground?: Map<string, Promise<string | null>>;
 };
 const tracked: Map<string, TrackedAction[]> = (g._xenmanTracked ??= new Map());
 const seen: Map<string, Map<string, SeenTask>> = (g._xenmanSeenTasks ??= new Map());
 const internal: Map<string, number> = (g._xenmanInternalTasks ??= new Map());
+const background: Map<string, Promise<string | null>> = (g._xenmanBackground ??= new Map());
 
 const fresh = (startedAt: number, finishedAt: number | undefined, state: TaskState, now: number) =>
   state === "running" || now - (finishedAt ?? startedAt) < KEEP_MS;
@@ -82,6 +84,28 @@ export function settleAction(t: TrackedAction, state: TaskState, error?: string)
   t.state = state;
   t.finishedAt = Date.now();
   if (error) t.error = error;
+}
+
+/**
+ * Work that outlasts its request: a synchronous XenServer call with no Async
+ * form (VMSS.snapshot_now). Its outcome -- null when it succeeded, else what
+ * went wrong -- is kept a minute for the API wrapper to follow (route.ts,
+ * trackEnd); the work runs on either way, and never ends in an unhandled
+ * rejection.
+ */
+export function startBackground(work: Promise<unknown>, describe: (err: unknown) => string): string {
+  const id = crypto.randomUUID();
+  const outcome = work.then(
+    () => null,
+    (err: unknown) => describe(err),
+  );
+  background.set(id, outcome);
+  void outcome.then(() => setTimeout(() => background.delete(id), 60_000).unref?.());
+  return id;
+}
+
+export function backgroundOutcome(id: string): Promise<string | null> | undefined {
+  return background.get(id);
 }
 
 /** Not a task after all (refused, or a question back): gone from the list. */

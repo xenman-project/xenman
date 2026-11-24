@@ -297,9 +297,9 @@ async function assignVms(call: XapiCall, ref: string, wanted: string[], current:
 /**
  * A new schedule (CreateVMPolicy) or a changed one (VMSS.SaveChanges: only
  * what changed, the frequency before the schedule). Returns its ref and, when
- * a first run was asked for, the task taking the snapshots.
+ * a first run was asked for, the snapshots being taken (see snapshotNow).
  */
-export async function saveVmss(call: XapiCall, ref: string | null, input: VmssInput): Promise<{ ref: string; taskRef: string | null }> {
+export async function saveVmss(call: XapiCall, ref: string | null, input: VmssInput): Promise<{ ref: string; snapshot: Promise<unknown> | null }> {
   let current: Rec | null = null;
   if (ref) {
     current = await call<Rec>("VMSS.get_record", [ref]);
@@ -334,8 +334,7 @@ export async function saveVmss(call: XapiCall, ref: string | null, input: VmssIn
     if (!sameMap(held, schedule)) await call("VMSS.set_schedule", [ref, schedule]);
     await assignVms(call, ref, input.vms, ((current.VMs as string[]) || []).filter(isRef));
   }
-  const taskRef = input.runNow ? await call<string>("Async.VMSS.snapshot_now", [ref]) : null;
-  return { ref, taskRef };
+  return { ref, snapshot: input.runNow ? snapshotNow(call, ref) : null };
 }
 
 /** DestroyPolicyAction: its VMs out of it first, then the schedule. */
@@ -355,12 +354,24 @@ export async function setVmssEnabled(call: XapiCall, ref: string, enabled: boole
   return String(rec.name_label ?? "");
 }
 
-/** RunPolicyNowAction, as a task: the snapshots of all its VMs can take a while. */
-export async function runVmssNow(call: XapiCall, ref: string): Promise<{ name: string; taskRef: string }> {
+/**
+ * VMSS.snapshot_now, which XenServer has only as a synchronous call (no
+ * Async.VMSS.snapshot_now: the datamodel gives it the Session flag alone). It
+ * returns once the snapshots of all the schedule's VMs are taken, so it is not
+ * awaited here: the caller follows the promise (lib/task-registry.ts,
+ * startBackground) and the request returns at once, as XenCenter's
+ * RunPolicyNowAction runs it in the background.
+ */
+function snapshotNow(call: XapiCall, ref: string): Promise<unknown> {
+  return call("VMSS.snapshot_now", [ref]);
+}
+
+/** RunPolicyNowAction: the snapshots of all its VMs, taken in the background. */
+export async function runVmssNow(call: XapiCall, ref: string): Promise<{ name: string; snapshot: Promise<unknown> }> {
   await assertAllowed(call, null);
   const rec = await call<Rec>("VMSS.get_record", [ref]);
   if (!((rec.VMs as string[]) || []).some(isRef)) throw new VmssRefused("The schedule has no VMs.", 409);
-  return { name: String(rec.name_label ?? ""), taskRef: await call<string>("Async.VMSS.snapshot_now", [ref]) };
+  return { name: String(rec.name_label ?? ""), snapshot: snapshotNow(call, ref) };
 }
 
 /** One VM into a schedule, or out of any (vmss null). */

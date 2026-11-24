@@ -127,7 +127,7 @@ import {
   ParsedXenEvent,
 } from "@/lib/types";
 import { actorOf, auditRequest, clientIp, type AuditCategory, type AuditOutcome } from "@/lib/audit";
-import { dropAction, isInternalTask, markLinkedTask, settleAction, trackAction, type JobKind, type TaskObject } from "@/lib/task-registry";
+import { backgroundOutcome, dropAction, isInternalTask, markLinkedTask, settleAction, startBackground, trackAction, type JobKind, type TaskObject } from "@/lib/task-registry";
 import { cancelIsAdminOnly, recentTasks } from "@/lib/recent-tasks";
 import { getMgmtJob, runningMgmtJob, startManagementChange } from "@/lib/network-mgmt-job";
 import { buildGpuOverview } from "@/lib/xen-gpu";
@@ -286,6 +286,20 @@ const WLB_ERRORS: Record<string, string> = {
   WLB_MALFORMED_RESPONSE: "Workload Balancing sent an answer the pool could not read.",
   WLB_INTERNAL_ERROR: "Workload Balancing reported an internal error.",
 };
+
+/**
+ * A snapshot schedule's error as XenServer gave it: the code with its details
+ * (a bare "Fault" says nothing), and the snapshots outlasting the 5 minutes a
+ * call may wait for an answer said as such.
+ */
+function vmssWhy(err: unknown): string {
+  if (err instanceof XenApiError) {
+    return [err.message, ...(Array.isArray(err.data) ? err.data.map((d) => (typeof d === "string" ? d : JSON.stringify(d))) : [])].join(" ");
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("Headers Timeout")) return "No answer from XenServer within 5 minutes; it may still be taking the snapshots.";
+  return message;
+}
 
 function wlbErrorMessage(err: unknown): string {
   if (!(err instanceof XenApiError)) return err instanceof Error ? err.message : "Workload Balancing failed";
@@ -2625,7 +2639,7 @@ async function dispatch(request: NextRequest) {
               const r = await saveVmss(call, vmssRef, input);
               return NextResponse.json({
                 vmssRef: r.ref,
-                ...(r.taskRef ? { taskRef: r.taskRef } : {}),
+                ...(r.snapshot ? { backgroundId: startBackground(r.snapshot, vmssWhy) } : {}),
                 auditNote: `schedule "${input.name}": ${input.frequency}, keeps ${input.retained}, ${input.vms.length} VM${input.vms.length === 1 ? "" : "s"}${input.runNow ? ", first snapshot now" : ""}`,
               });
             }
@@ -2642,7 +2656,7 @@ async function dispatch(request: NextRequest) {
             case "vmss_run_now": {
               if (!vmssRef) return NextResponse.json({ error: "No schedule given" }, { status: 400 });
               const r = await runVmssNow(call, vmssRef);
-              return NextResponse.json({ taskRef: r.taskRef, auditNote: `schedule "${r.name}" run now` });
+              return NextResponse.json({ backgroundId: startBackground(r.snapshot, vmssWhy), auditNote: `schedule "${r.name}" run now` });
             }
             default: {
               if (!isXenRef(vmRef)) return NextResponse.json({ error: "No VM given" }, { status: 400 });
@@ -2652,6 +2666,7 @@ async function dispatch(request: NextRequest) {
           }
         } catch (err) {
           if (err instanceof VmssRefused) return NextResponse.json({ error: err.message }, { status: err.status });
+          if (err instanceof XenApiError) return NextResponse.json({ error: vmssWhy(err) }, { status: 502 });
           throw err;
         }
       }
@@ -4107,6 +4122,12 @@ async function trackEnd(t: ReturnType<typeof trackAction>, action: string, respo
   }
   const job = TRACKED_ACTIONS[action]?.job;
   const jobId = typeof body.jobId === "string" ? body.jobId : (body.job as { id?: unknown } | undefined)?.id;
+  // A synchronous call still running on the server (VMSS.snapshot_now): running until it ends.
+  const later = typeof body.backgroundId === "string" ? backgroundOutcome(body.backgroundId) : undefined;
+  if (later) {
+    void later.then((error) => (error ? settleAction(t, "failed", error) : settleAction(t, "done")));
+    return;
+  }
   if (typeof body.taskRef === "string" && isXenRef(body.taskRef)) {
     t.link = { kind: "task", ref: body.taskRef };
     markLinkedTask(body.taskRef);

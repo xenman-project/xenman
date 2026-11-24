@@ -2045,10 +2045,13 @@ function rpc(method, p) {
       rec.schedule = { ...p[2] };
       return "";
     }
-    case "Async.VMSS.snapshot_now": {
+    // Synchronous only, as in XenServer (no Async.VMSS.snapshot_now): the answer comes once
+    // the snapshots are taken -- held back by the server below; "vmss-snapshot-fails" fails it.
+    case "VMSS.snapshot_now": {
       vmssLicensed();
       if (!vmssModel().recs[h]) fail("HANDLE_INVALID", "VMSS", h);
-      return task(2, () => "");
+      if (flag("vmss-snapshot-fails")) fail("SR_FULL", "OpaqueRef:sr-nfs");
+      return "";
     }
     case "VM.set_snapshot_schedule": {
       vmssLicensed();
@@ -2227,6 +2230,14 @@ const server = (TLS ? https.createServer.bind(null, TLS) : http.createServer)((r
     let out;
     try { out = { jsonrpc: "2.0", id: msg.id, result: rpc(msg.method, msg.params || []) }; }
     catch (e) { const d = Array.isArray(e) ? e : ["INTERNAL_ERROR", String(e)]; out = { jsonrpc: "2.0", id: msg.id, error: { code: 1, message: d[0], data: d.slice(1) } }; }
+    dump();
+    // A synchronous call that takes its time (VMSS.snapshot_now): the answer 1.5 s later.
+    if (msg.method === "VMSS.snapshot_now") {
+      return setTimeout(() => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(out));
+      }, 1500);
+    }
     dump();
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(out).replace(/"__INF__"/g, "Infinity").replace(/"__NINF__"/g, "-Infinity").replace(/"__NAN__"/g, "NaN"));
