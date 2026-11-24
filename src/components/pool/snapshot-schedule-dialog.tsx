@@ -224,7 +224,7 @@ export function SnapshotScheduleDialog({
                   <span>At</span>
                   <Select value={String(min)} onValueChange={(v) => setMin(Number(v))}>
                     <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {VMSS_MINUTES.map((m) => <SelectItem key={m} value={String(m)}>{pad(m)}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -235,14 +235,14 @@ export function SnapshotScheduleDialog({
                   <span>At</span>
                   <Select value={String(hour)} onValueChange={(v) => setHour(Number(v))}>
                     <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {Array.from({ length: 24 }, (_, h) => <SelectItem key={h} value={String(h)}>{pad(h)}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <span>:</span>
                   <Select value={String(min)} onValueChange={(v) => setMin(Number(v))}>
                     <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper">
                       {VMSS_MINUTES.map((m) => <SelectItem key={m} value={String(m)}>{pad(m)}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -277,7 +277,7 @@ export function SnapshotScheduleDialog({
             <Label htmlFor="vmss-keep" className="font-normal">Number of snapshots to keep</Label>
             <Select value={String(retained)} onValueChange={(v) => setRetained(Number(v))}>
               <SelectTrigger id="vmss-keep" className="w-20"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent position="popper">
                 {Array.from({ length: 10 }, (_, i) => <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}</SelectItem>)}
               </SelectContent>
             </Select>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CalendarClock, ChevronDown, ChevronRight, Info, Loader2, Pause, Pencil, Play, Plus, Trash2, Zap } from "lucide-react";
 import type { HostConnection } from "@/lib/types";
 import type { VmssMessage, VmssOverview, VmssSchedule } from "@/lib/xen-vmss";
@@ -91,19 +91,27 @@ export function SnapshotSchedulesTab({ conn, poolName, canAct }: { conn: HostCon
   const [deleting, setDeleting] = useState<VmssSchedule | null>(null);
   const [history, setHistory] = useState<Record<string, boolean>>({});
 
+  // Read once, after each action and with a new session -- not on every event of the pool
+  // (conn changes with each): reading again then rendered the open dialog anew, and its
+  // lists jumped back to the chosen entry while being scrolled.
+  const connRef = useRef(conn);
+  useEffect(() => {
+    connRef.current = conn;
+  });
+  const sessionRef = conn.session?.sessionRef;
   const load = useCallback(async () => {
     try {
-      setData(await vmssCall<VmssOverview>(conn, { action: "vmss_overview" }));
+      setData(await vmssCall<VmssOverview>(connRef.current, { action: "vmss_overview" }));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The snapshot schedules could not be read.");
     }
-  }, [conn]);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(load, 0);
     return () => clearTimeout(t);
-  }, [load]);
+  }, [load, sessionRef]);
 
   async function act(s: VmssSchedule, body: Record<string, unknown>, done?: string) {
     setBusy(s.ref);
@@ -356,18 +364,24 @@ export function VmSnapshotSchedule({ conn, vmRef, canAct }: { conn: HostConnecti
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // As in the tab: not read again on every event of the pool.
+  const connRef = useRef(conn);
+  useEffect(() => {
+    connRef.current = conn;
+  });
+  const sessionRef = conn.session?.sessionRef;
   const load = useCallback(async () => {
     try {
-      setData(await vmssCall<VmssOverview>(conn, { action: "vmss_overview" }));
+      setData(await vmssCall<VmssOverview>(connRef.current, { action: "vmss_overview" }));
     } catch {
       setData(null);
     }
-  }, [conn]);
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(load, 0);
     return () => clearTimeout(t);
-  }, [load]);
+  }, [load, sessionRef]);
 
   if (!data) return null;
   const mine = data.vms.find((v) => v.ref === vmRef)?.schedule ?? null;
@@ -415,7 +429,7 @@ export function VmSnapshotSchedule({ conn, vmRef, canAct }: { conn: HostConnecti
           <SelectTrigger className="w-full sm:w-56" aria-label="Snapshot schedule">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper">
             <SelectItem value="none">No schedule</SelectItem>
             {data.schedules.map((x) => (
               <SelectItem key={x.ref} value={x.ref}>{x.name}</SelectItem>
