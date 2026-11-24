@@ -17,6 +17,7 @@ section of the version it leads to.
 - **Updates on a pool of one host with VMs running**: the Install Updates dialog offers to shut the VMs down before the update and start them again afterwards, as there is no other host to move them to. VMs that do not shut down within 10 minutes are forced off.
 
 ### Fixed
+- **Snapshot schedules: the first snapshots and Run now failed** with "Fault" on a XenServer pool, and the hour and minute lists of the schedule dialog jumped back to the chosen entry while being scrolled. XenServer takes a schedule's snapshots in a synchronous call only; XenMan now makes it in the background, and Recent Tasks shows the run until XenServer answers. Errors of XenServer are shown with their details.
 - **Updates on a pool of one host were refused** with "no other host is available for running VMs" although every VM was shut down (#8). The update is now refused only while VMs run or are paused on the host, and names them; with none, the host is not evacuated at all.
 - **Updates: a failed live patch went unnoticed.** XenServer then asks for a host restart as a recommended task, which XenMan did not read, so the host kept running without the fix. With automatic restarts the host is now evacuated and restarted; without them, the update says so.
 
