@@ -6,15 +6,37 @@ section of the version it leads to.
 
 ## [1.0.5] - 2026-11-27
 
+### Highlights
+
+#### Snapshot schedules
+Hourly, daily or weekly VM snapshots per pool, keeping 1–10 snapshots.
+
+![Snapshot schedules](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/snapshot-schedules.png)
+
+#### Recent Tasks
+A task panel in every view, including tasks started by XenCenter and other clients.
+
+![Recent Tasks](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/recent-tasks.png)
+
+#### Configure Updates
+Update channel, automatic synchronization and proxy per pool.
+
+![Configure Updates](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/configure-updates.png)
+
+#### Bulk VM actions
+Start, shut down or reboot several VMs at once.
+
+![Bulk VM actions](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/bulk-vms.png)
+
+#### VM Tools details
+Virtualization mode and VM Tools and driver versions in the VM overview.
+
+![VM Tools details](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/vm-tools.png)
+
 ### New
 - **Microsoft Entra ID sign-in** – single sign-on with roles from Entra app roles; MFA is handled by Entra ID.
-- **Snapshot schedules** – hourly, daily or weekly VM snapshots per pool, keeping 1–10 snapshots.
-- **Recent Tasks** – a task panel in every view, including tasks started by XenCenter and other clients.
-- **Configure Updates** – update channel, automatic synchronization and proxy per pool.
-- **Bulk VM actions** – start, shut down or reboot several VMs at once.
 - **Single-host pools** – updates can shut down running VMs and start them again afterwards.
 - **Update guidance** – tasks for full effectiveness and live patches are shown and can be performed.
-- **VM Tools details** – virtualization mode and VM Tools and driver versions in the VM overview.
 
 ### Fixed
 - Updates on single-host pools were refused although all VMs were shut down (#8).
