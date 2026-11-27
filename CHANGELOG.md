@@ -34,19 +34,19 @@ Virtualization mode and VM Tools and driver versions in the VM overview.
 ![VM Tools details](https://raw.githubusercontent.com/xenman-project/xenman/main/docs/releases/1.0.5/vm-tools.png)
 
 ### New
-- **Microsoft Entra ID sign-in** – single sign-on with roles from Entra app roles; MFA is handled by Entra ID.
+- **Microsoft Entra ID sign-in** – single sign-on with roles from Entra app roles. MFA is handled by Entra ID.
 - **Single-host pools** – updates can shut down running VMs and start them again afterwards.
 - **Update guidance** – tasks for full effectiveness and live patches are shown and can be performed.
 
 ### Fixed
 - Updates on single-host pools were refused although all VMs were shut down (#8).
-- A failed live patch went unnoticed; the required host restart is now shown.
+- A failed live patch went unnoticed. The required host restart is now shown.
 - Snapshot schedules: "Take the first snapshots now" and "Run now" failed with "Fault".
 
 ### Security
 Hardening from a security review:
 - The XenServer session stays on the server and no longer reaches the browser.
-- Host restart and shutdown are restricted to administrators; operator SSH exports are limited to mounted file systems.
+- Host restart and shutdown are restricted to administrators. Operator SSH exports are limited to mounted file systems.
 - CSRF protection, consoles closed when access ends, and fixes in the updater and user administration.
 - Dependencies updated: nodemailer 10.3.1, ws 8.22.1.
 
