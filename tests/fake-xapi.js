@@ -473,6 +473,8 @@ function memoryVmRecord(r) {
   return { name_label: v.name, power_state: v.power, resident_on: v.resident, is_control_domain: Boolean(v.dom0), domid: v.dom0 ? "0" : "5",
     memory_overhead: String(v.dom0 ? 0 : 64 * MiB_), memory_static_min: String(m.smin), memory_dynamic_min: String(m.min), memory_dynamic_max: String(m.max),
     memory_static_max: String(m.smax), HVM_boot_policy: v.dom0 ? "" : "BIOS order",
+    // vm-tools (screenshots): guests as HVM, as XenServer reports them.
+    ...(flag("vm-tools") && !v.dom0 ? { domain_type: "hvm" } : {}),
     allowed_operations: r === "OpaqueRef:vm-2" ? ["hard_shutdown", "start", "start_on"] : ["clean_shutdown", "hard_shutdown", "start", "start_on"],
     current_operations: {},
     metrics: `OpaqueRef:vmm-${r.slice(10)}`, guest_metrics: v.dom0 ? "OpaqueRef:NULL" : `OpaqueRef:gm-${r.slice(10)}`,
@@ -682,6 +684,7 @@ function memoryModel(method, p) {
         enabled: x.enabled, other_config: { ...(ref === H2 && flag("h2-maintenance") ? { MAINTENANCE_MODE: "true" } : {}), ...(st.hostOc?.[ref] ?? {}) }, name_label: x.name, metrics: `OpaqueRef:m${ref.slice(-1)}`, memory_overhead: String(512 * MiB),
         control_domain: `OpaqueRef:dom0-${ref.slice(-1)}`, resident_VMs: Object.keys(st.vms).filter((r) => st.vms[r].resident === ref && running(r)),
         license_params: { restrict_network_sriov: "false", restrict_dmc: flag("dmc-unlicensed") ? "true" : "false",
+          ...(flag("vmss-model") ? { restrict_vmss: flag("vmss-restricted") ? "true" : "false", restrict_checkpoint: flag("checkpoint-restricted") ? "true" : "false" } : {}),
           ...(flag("vm-gpu-model") ? { restrict_gpu: "false", restrict_vgpu: flag("vgpu-unlicensed") ? "true" : "false" } : {}) },
         PBDs: ref === H2 ? ["OpaqueRef:pbd-mem-local2"] : [] };
       return out;
@@ -1666,7 +1669,9 @@ function rpc(method, p) {
     // Desktop is on -- off with the flag rdp-off.
     case "VM_guest_metrics.get_record": {
       const n = Number(String(h).replace(/\D/g, "")) || 0;
-      return { os_version: { name: "Windows 11 Enterprise|C:\\Windows" }, networks: { "0/ip": `10.0.0.${100 + n}`, "0/ipv6/0": "fe80::1" }, other: { "data-ts": flag("rdp-off") ? "0" : "1" } };
+      return { os_version: { name: "Windows 11 Enterprise|C:\\Windows" }, networks: { "0/ip": `10.0.0.${100 + n}`, "0/ipv6/0": "fe80::1" }, other: { "data-ts": flag("rdp-off") ? "0" : "1" },
+        // vm-tools: the XenServer VM Tools as a Windows guest reports them (agent, then each driver).
+        ...(flag("vm-tools") ? { PV_drivers_detected: true, PV_drivers_version: { major: "9", minor: "4", micro: "2", build: "17", xennet: "XenServer 9.4.2.17", xeniface: "XenServer 9.4.2.17", xenvif: "XenServer 9.4.2.17", xenvbd: "XenServer 9.4.1.152", xenbus: "XenServer 9.4.1.152" } } : {}) };
     }
     case "VM.get_power_state": return st.vms[h].power;
     case "VM.get_all_records":
@@ -2063,7 +2068,8 @@ function rpc(method, p) {
       }
       return "";
     }
-    case "host.get_server_localtime": return "20261121T10:07:00";
+    // A fixed time for the tests; "live-clock" (screenshots): the coordinator's clock now, in UTC.
+    case "host.get_server_localtime": return flag("live-clock") ? new Date().toISOString().replace(/-/g, "").replace(/\.\d+Z$/, "") : "20261121T10:07:00";
     case "message.get_all_records":
       if (!flag("vmss-model")) return {};
       return {
