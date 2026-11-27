@@ -6,36 +6,30 @@ section of the version it leads to.
 
 ## [1.0.5] - 2026-11-27
 
-### Added
-- **Sign in with Microsoft Entra ID.** Under Settings > Security an administrator enters the app registration (tenant ID, client ID, client secret) and XenMan's address; the sign-in page then offers **Sign in with Microsoft**. The role comes from the app roles `XenMan.Admin`, `XenMan.Operator` and `XenMan.Viewer` at every sign-in; someone without one does not get in. XenMan creates the account at the first sign-in; pool access is still given in XenMan. MFA is left to Entra ID, so XenMan's two-factor code is not asked of these accounts. Password sign-in can be left to administrators only, as the way in when Entra ID is down. XenMan checks the ID token itself (signature against the tenant's keys, issuer, audience, tenant, nonce, PKCE), with no new dependency. The client secret is stored encrypted. See the README for setting up the app registration.
-- **Updates: tasks for full effectiveness and live patches.** XenServer sorts the tasks after an update into mandatory, recommended and full effectiveness; the last are needed only for specific hardware or features. XenMan showed none of these, so a host restart XenCenter lists under "Update tasks for full effectiveness" did not appear. The Updates tab now shows them per host and per update ("Full effectiveness: Restart host"), the components with live patches ("Live patch: Xen, Kernel") and tasks still pending from an earlier update, recommended and full effectiveness included. The Install Updates dialog offers **Also perform tasks for full effectiveness** (off by default, with automatic restarts only) and says per host what is not performed.
-- **Recent Tasks**, docked at the bottom of every view -- resizable at its top edge and collapsible -- for the selected VM, host or pool, or every pool on the dashboard; on a phone a card in the overview of a pool or host. It lists what is running and what ended in the last 24 hours, with progress, the latest steps of an update and Cancel where XenServer allows it. XenMan's own actions and jobs show who started them; tasks of other clients, such as XenCenter or xe, are listed too (XenServer does not record their user). Operators may cancel a VM's task, administrators any.
-- **Configure Updates**, as in XenCenter: per pool, the update channel (Normal or Early Access), automatic synchronization (daily, or weekly on a chosen day) and a proxy server for the update channel, with XenCenter's calls. After a new channel, synchronizing is offered. The proxy password is kept by XenServer and never sent to the browser. The Updates tab now names the channel as XenCenter does ("Normal" instead of `normal_repo`). Administrators only.
-- **Snapshot schedules**, as in XenCenter: per pool, schedules that take snapshots of their VMs hourly, daily or weekly (disk only, or disk and memory where the licence allows) and keep the last 1 to 10. A Snapshot Schedules tab lists them with their VMs, the next run in the pool's time and in yours, and the result of their last runs from XenServer's alerts; schedules can be created, edited, enabled or disabled, run at once and deleted. A VM's Snapshots tab shows the schedule it is in, lets it be changed and leads to the schedules. Administrators and operators.
-- **Several VMs at once**, as in XenCenter: in the VMs tab of a pool or a host, VMs can be ticked (or all of them) and started, shut down (optionally forced) or rebooted together; each counts as an action of its own in Recent Tasks and the audit log. Administrators and operators.
-- **Virtualization & VM Tools** in a VM's overview, as in XenCenter: the virtualization mode and state, the version of the XenServer VM Tools' Management Agent and of each driver (Xennet, Xeniface, Xenvif, Xenvbd, Xenbus), and, where the guest reports them, the Citrix VDA and PVS Target Device versions.
-- **Updates on a pool of one host with VMs running**: the Install Updates dialog offers to shut the VMs down before the update and start them again afterwards, as there is no other host to move them to. VMs that do not shut down within 10 minutes are forced off.
+### New
+- **Microsoft Entra ID sign-in** – single sign-on with roles from Entra app roles; MFA is handled by Entra ID.
+- **Snapshot schedules** – hourly, daily or weekly VM snapshots per pool, keeping 1–10 snapshots.
+- **Recent Tasks** – a task panel in every view, including tasks started by XenCenter and other clients.
+- **Configure Updates** – update channel, automatic synchronization and proxy per pool.
+- **Bulk VM actions** – start, shut down or reboot several VMs at once.
+- **Single-host pools** – updates can shut down running VMs and start them again afterwards.
+- **Update guidance** – tasks for full effectiveness and live patches are shown and can be performed.
+- **VM Tools details** – virtualization mode and VM Tools and driver versions in the VM overview.
 
 ### Fixed
-- **Snapshot schedules: the first snapshots and Run now failed** with "Fault" on a XenServer pool, and the hour and minute lists of the schedule dialog jumped back to the chosen entry while being scrolled. XenServer takes a schedule's snapshots in a synchronous call only; XenMan now makes it in the background, and Recent Tasks shows the run until XenServer answers. Errors of XenServer are shown with their details.
-- **Updates on a pool of one host were refused** with "no other host is available for running VMs" although every VM was shut down (#8). The update is now refused only while VMs run or are paused on the host, and names them; with none, the host is not evacuated at all.
-- **Updates: a failed live patch went unnoticed.** XenServer then asks for a host restart as a recommended task, which XenMan did not read, so the host kept running without the fix. With automatic restarts the host is now evacuated and restarted; without them, the update says so.
+- Updates on single-host pools were refused although all VMs were shut down (#8).
+- A failed live patch went unnoticed; the required host restart is now shown.
+- Snapshot schedules: "Take the first snapshots now" and "Run now" failed with "Fault".
 
 ### Security
-Fixes from a security review of XenMan.
-- **Every user's browser held the pool's XenServer session**, viewers included. That session is opened with the pool's stored account, as a rule root, so whoever could reach the pool directly could use it past XenMan's roles, and it stayed valid after the XenMan account was signed out or removed. The browser now only gets a random handle that works through XenMan alone; the XenServer session never leaves XenMan. Signing out, being signed out everywhere, losing a pool or the account's removal now also end the XenServer session at the pool.
-- **Operators could restart or shut down a XenServer host** through the API, although the Power menu is shown to administrators only. Both are now for administrators only, as disabling a host already was.
-- **Operators could set any key in a host's `other_config`** through two API actions the interface never used. They are removed.
-- **An operator's SSH export could write anywhere on the host as root**, for example filling the control domain's file system. Operators now export below `/mnt`, `/media` or an SR's mount point, and only into a mounted file system; administrators as before. An export's status is only shown to whoever started it and to administrators.
-- **A console that was open stayed open** after signing out, losing the pool, being made an operator (for a host's own console) or being deleted, and such a user could open a console again from an earlier session. Consoles are now checked when they open and every half minute while open.
-- **Requests from other sites (CSRF).** Beyond the SameSite cookie, XenMan now refuses any request that changes something unless it comes from its own pages (`Sec-Fetch-Site`, else `Origin`). This also covers the sign-in itself and requests from another subdomain or port of the same host.
-- **A WebSocket upgrade to any other path was never answered.** Enough such connections, without signing in, filled XenMan's connection limit until it restarted. They are now answered and closed.
-- **The appliance's updater followed a symbolic link at its trigger file** and named what it read in its error message, which XenMan could read. The trigger and the uploaded package now have to be plain files, the trigger has to name the uploaded package, and nothing from it is repeated back.
-- **The user list sent administrators the links of password resets** other users had asked for. It no longer does.
-- nodemailer 10.3.1 and ws 8.22.1, which fix known issues in both.
+Hardening from a security review:
+- The XenServer session stays on the server and no longer reaches the browser.
+- Host restart and shutdown are restricted to administrators; operator SSH exports are limited to mounted file systems.
+- CSRF protection, consoles closed when access ends, and fixes in the updater and user administration.
+- Dependencies updated: nodemailer 10.3.1, ws 8.22.1.
 
 ### Changed
-- The Updates tab, the Install Updates dialog and the update progress use shorter, XenCenter-style wording (for example "Install Updates", "Evacuate host", "Exit maintenance mode").
+- Update screens use shorter, XenCenter-style wording.
 
 ## [1.0.4] - 2026-11-16
 
